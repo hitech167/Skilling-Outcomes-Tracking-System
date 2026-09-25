@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-
+from fastapi.middleware.cors import CORSMiddleware
 from database.connection import SessionLocal, get_db, init_db
 from services.auth import require_admin, require_analytics_access
 from routes import (
@@ -129,6 +129,13 @@ app = FastAPI(
     ),
     version="8.0.0",
     lifespan=lifespan,
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ---- Access control ------------------------------------------------
