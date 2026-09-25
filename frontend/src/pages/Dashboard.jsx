@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, Spin, Typography, Row, Col } from 'antd';
+import { Card, Spin, Typography, Row, Col, Tag, Space } from 'antd';
 import {
   TeamOutlined,
   PhoneOutlined,
@@ -17,33 +17,37 @@ const CARDS_CONFIG = [
     key: 'trainees',
     title: 'Trainees',
     description: 'Track candidate enrollment, training batches, and profiles.',
-    icon: <TeamOutlined style={{ fontSize: 28, color: '#1677ff' }} />,
+    icon: <TeamOutlined style={{ fontSize: 30, color: '#1677ff' }} />,
     roles: ['admin'],
     path: '/trainees',
+    available: true,
   },
   {
     key: 'follow-ups',
     title: 'Follow-ups',
     description: 'Monitor post-placement check-ins and outcome milestones.',
-    icon: <PhoneOutlined style={{ fontSize: 28, color: '#52c41a' }} />,
+    icon: <PhoneOutlined style={{ fontSize: 30, color: '#52c41a' }} />,
     roles: ['admin'],
     path: '/follow-ups',
+    available: false,
   },
   {
     key: 'employers',
     title: 'Employers',
     description: 'Manage employer partners, vacancies, and hiring feedback.',
-    icon: <BankOutlined style={{ fontSize: 28, color: '#fa8c16' }} />,
+    icon: <BankOutlined style={{ fontSize: 30, color: '#fa8c16' }} />,
     roles: ['admin'],
     path: '/employers',
+    available: false,
   },
   {
     key: 'analytics',
     title: 'Analytics',
     description: 'View aggregate placement rates, retention, and reports.',
-    icon: <BarChartOutlined style={{ fontSize: 28, color: '#722ed1' }} />,
+    icon: <BarChartOutlined style={{ fontSize: 30, color: '#722ed1' }} />,
     roles: ['admin', 'analyst'],
     path: '/analytics',
+    available: false,
   },
 ];
 
@@ -73,6 +77,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
 
   useEffect(() => {
+    document.title = "Dashboard — Skilling Outcomes Tracking System";
     let isMounted = true;
 
     async function fetchUser() {
@@ -84,6 +89,8 @@ export default function Dashboard() {
       } catch (err) {
         if (err?.status === 401 || !sessionStorage.getItem('token')) {
           logout();
+          navigate('/login', { replace: true });
+        } else {
           navigate('/login', { replace: true });
         }
       } finally {
@@ -137,47 +144,102 @@ export default function Dashboard() {
         animate="visible"
       >
         <Row gutter={[24, 24]}>
-          {visibleCards.map((card) => (
-            <Col xs={24} sm={12} lg={visibleCards.length === 1 ? 12 : 6} key={card.key}>
-              <motion.div variants={itemVariants} style={{ height: '100%' }}>
-                <Card
-                  hoverable
-                  onClick={() => card.path && navigate(card.path)}
-                  style={{
-                    height: '100%',
-                    borderRadius: 12,
-                    border: '1px solid #eef0f3',
-                    boxShadow: '0 4px 14px rgba(0, 0, 0, 0.03)',
-                    cursor: card.path ? 'pointer' : 'default',
-                  }}
-                  styles={{
-                    body: {
-                      padding: '24px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      height: '100%',
-                    },
-                  }}
-                >
-                  <div style={{ marginBottom: 16 }}>{card.icon}</div>
-                  <Title level={5} style={{ margin: '0 0 8px 0', fontWeight: 600 }}>
-                    {card.title}
-                  </Title>
-                  <Paragraph
-                    type="secondary"
+          {visibleCards.map((card) => {
+            const isClickable = card.available && card.path;
+
+            return (
+              <Col xs={24} sm={24} md={12} lg={12} xl={12} key={card.key}>
+                <motion.div variants={itemVariants} style={{ height: '100%' }}>
+                  <Card
+                    hoverable={isClickable}
+                    onClick={() => {
+                      if (isClickable) {
+                        navigate(card.path);
+                      }
+                    }}
                     style={{
-                      margin: 0,
-                      fontSize: 13,
-                      lineHeight: 1.5,
-                      flex: 1,
+                      height: 200,
+                      borderRadius: 12,
+                      border: '1px solid #eef0f3',
+                      boxShadow: '0 4px 14px rgba(0, 0, 0, 0.03)',
+                      cursor: isClickable ? 'pointer' : 'default',
+                      opacity: card.available ? 1 : 0.68,
+                      backgroundColor: card.available ? '#ffffff' : '#fafafa',
+                      transition: 'all 0.2s ease',
+                    }}
+                    styles={{
+                      body: {
+                        padding: '24px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        height: '100%',
+                        boxSizing: 'border-box',
+                      },
                     }}
                   >
-                    {card.description}
-                  </Paragraph>
-                </Card>
-              </motion.div>
-            </Col>
-          ))}
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'flex-start',
+                        marginBottom: 16,
+                      }}
+                    >
+                      <div
+                        style={{
+                          filter: card.available ? 'none' : 'grayscale(1)',
+                        }}
+                      >
+                        {card.icon}
+                      </div>
+                      {!card.available && (
+                        <Tag
+                          color="default"
+                          style={{
+                            fontSize: 11,
+                            margin: 0,
+                            borderRadius: 4,
+                            color: '#8c8c8c',
+                            backgroundColor: '#f0f0f0',
+                            border: 'none',
+                          }}
+                        >
+                          Coming soon
+                        </Tag>
+                      )}
+                    </div>
+
+                    <Title
+                      level={5}
+                      style={{
+                        margin: '0 0 8px 0',
+                        fontWeight: 600,
+                        color: card.available ? '#1f2937' : '#6b7280',
+                      }}
+                    >
+                      {card.title}
+                    </Title>
+
+                    <Paragraph
+                      type="secondary"
+                      style={{
+                        margin: 0,
+                        fontSize: 13,
+                        lineHeight: 1.5,
+                        flex: 1,
+                        overflow: 'hidden',
+                        display: '-webkit-box',
+                        WebkitLineClamp: 3,
+                        WebkitBoxOrient: 'vertical',
+                      }}
+                    >
+                      {card.description}
+                    </Paragraph>
+                  </Card>
+                </motion.div>
+              </Col>
+            );
+          })}
         </Row>
       </motion.div>
     </div>

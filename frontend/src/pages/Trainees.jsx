@@ -14,6 +14,7 @@ export default function Trainees() {
   const navigate = useNavigate();
 
   useEffect(() => {
+    document.title = "Trainee Lookup — Skilling Outcomes Tracking System";
     try {
       const raw = sessionStorage.getItem('recentTrainees');
       if (raw) {

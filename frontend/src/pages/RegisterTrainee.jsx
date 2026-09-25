@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+
 import {
   Card,
   Form,
@@ -38,6 +39,10 @@ export default function RegisterTrainee() {
   const [submitting, setSubmitting] = useState(false);
   const [successResult, setSuccessResult] = useState(null);
   const [errorState, setErrorState] = useState(null);
+
+  useEffect(() => {
+    document.title = "Register Trainee — Skilling Outcomes Tracking System";
+  }, []);
 
   const handleSubmit = async (values) => {
     setSubmitting(true);
@@ -332,10 +337,10 @@ export default function RegisterTrainee() {
                     value
                       ? Promise.resolve()
                       : Promise.reject(
-                          new Error(
-                            'The trainee must agree to follow-up contact and data usage to proceed'
-                          )
-                        ),
+                        new Error(
+                          'The trainee must agree to follow-up contact and data usage to proceed'
+                        )
+                      ),
                 },
               ]}
               style={{ marginBottom: 20 }}

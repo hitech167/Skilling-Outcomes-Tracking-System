@@ -1,15 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, Form, Input, Button, Alert, Typography } from 'antd';
 import { motion } from 'framer-motion';
 import { login } from '../api/client';
 
 const { Title, Text } = Typography;
-
 export default function Login() {
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const navigate = useNavigate();
+
+  useEffect(() => {
+    document.title = "Login — Skilling Outcomes Tracking System";
+  }, []);
 
   const handleSubmit = async (values) => {
     setLoading(true);
