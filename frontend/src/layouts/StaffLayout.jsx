@@ -36,9 +36,9 @@ const MENU_ITEMS = [
     label: <Link to="/trainees/register">Register trainee</Link>,
   },
   {
-    key: '/follow-ups',
+    key: '/followups',
     icon: <PhoneOutlined />,
-    label: <Link to="/follow-ups">Follow-ups</Link>,
+    label: <Link to="/followups">Follow-ups</Link>,
   },
   {
     key: '/messages',
@@ -103,8 +103,8 @@ export default function StaffLayout() {
     (location.pathname.startsWith('/trainees/register')
       ? '/trainees/register'
       : location.pathname.startsWith('/trainees')
-      ? '/trainees'
-      : location.pathname);
+        ? '/trainees'
+        : location.pathname);
 
   if (loading) {
     return (

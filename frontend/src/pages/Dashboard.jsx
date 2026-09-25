@@ -28,8 +28,8 @@ const CARDS_CONFIG = [
     description: 'Monitor post-placement check-ins and outcome milestones.',
     icon: <PhoneOutlined style={{ fontSize: 30, color: '#52c41a' }} />,
     roles: ['admin'],
-    path: '/follow-ups',
-    available: false,
+    path: '/followups',
+    available: true,
   },
   {
     key: 'employers',
