@@ -86,3 +86,21 @@ def test_employer_reminders_then_marked_unresponsive(isolated_db):
     verification = get_ok(admin, f"/api/employment/{employment_id}/verification")
     assert verification["verification_status"] == "Unable to Verify"
     assert "unresponsive" in verification["verification_notes"]
+
+
+def test_no_employer_reminders_after_consent_withdrawn(isolated_db):
+    trainee_id = make_trainee()
+    employment_id = make_employment(trainee_id, make_outcome(trainee_id, make_training(trainee_id), "Employed"))
+    admin.post(
+        f"/api/employment/{employment_id}/verification-request",
+        json={"employer_contact": "hr@voltworks.example"},
+    )
+    db = isolated_db()
+    for n in db.query(Notification).all():
+        n.created_at = datetime.now(timezone.utc) - timedelta(days=8)
+    db.commit()
+    db.close()
+
+    admin.post(f"/api/trainees/{trainee_id}/consent", json={"consent_given": False})
+    summary = admin.post("/api/verifications/remind-pending").json()
+    assert summary["reminded"] == 0 and summary["skipped_no_consent"] == 1

@@ -236,13 +236,17 @@ def remind_pending_verifications(db: Session) -> dict:
     data rather than silently pending forever.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=RESEND_AFTER_DAYS)
-    summary = {"reminded": 0, "marked_unresponsive": 0, "skipped_no_contact": 0, "notification_ids": []}
+    summary = {"reminded": 0, "marked_unresponsive": 0, "skipped_no_contact": 0, "skipped_no_consent": 0, "notification_ids": []}
 
     pending = db.query(EmployerVerification).filter(EmployerVerification.verification_status == "Pending").all()
     for verification in pending:
         contact = (verification.employer_contact or "").strip()
         if not contact:
             summary["skipped_no_contact"] += 1
+            continue
+        trainee = db.query(Trainee).filter(Trainee.id == verification.trainee_pk_id).one()
+        if not trainee.consent_given:
+            summary["skipped_no_consent"] += 1
             continue
         sent = (
             db.query(Notification)
