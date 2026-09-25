@@ -35,6 +35,7 @@ from routes import (
     auth,
     employer_verifications,
     employment,
+    employment_signals,
     employment_status,
     followup,
     followup_tracking,
@@ -149,6 +150,7 @@ app.include_router(trainees.router, dependencies=ADMIN_ONLY)
 app.include_router(training_records.router, dependencies=ADMIN_ONLY)
 app.include_router(outcomes.router, dependencies=ADMIN_ONLY)
 app.include_router(employment.router, dependencies=ADMIN_ONLY)
+app.include_router(employment_signals.router, dependencies=ADMIN_ONLY)
 app.include_router(self_employment.router, dependencies=ADMIN_ONLY)
 app.include_router(apprenticeship.router, dependencies=ADMIN_ONLY)
 app.include_router(non_placement.router, dependencies=ADMIN_ONLY)

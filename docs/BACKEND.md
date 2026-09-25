@@ -357,6 +357,7 @@ Access: **A** = admin, **A/An** = admin or analyst, **P** = public.
 |---|---|---|
 | POST | `/api/employer-verifications` | Record a verification (document, call, …) |
 | GET | `/api/employer-verifications/{verification_id}` | One verification |
+| POST | `/api/employment-signals/import` | Import external placements from CSV (§11.4) |
 | GET | `/api/employment/{employment_id}/verification` | Latest verification for a job |
 | POST | `/api/employment/{employment_id}/verification-request` | Create an employer confirmation link (§11) |
 | POST | `/api/wage-history` | Add a salary point |
@@ -539,6 +540,20 @@ Pending verification that has an employer contact. If the last request is
 older than 7 days it sends a reminder with a fresh link; once 3 requests
 have gone unanswered it sets the verification to **Unable to Verify** with
 the note "Employer unresponsive". It runs only when called (schedule it).
+
+### 11.4 External employment signals
+`POST /api/employment-signals/import` takes a CSV (max 2 MB / 5000 rows), a
+`source` label (e.g. EPFO) and optional `dry_run=true`. Each row identifies the
+trainee by `trainee_id`, `phone` or `external_id` (`TYPE:VALUE`) and gives
+`employer_name`, `start_date`, and optionally `job_role`, `monthly_salary`,
+`reference`. For a matched trainee with consent and a training record it adds,
+on their latest training, an **Employed** outcome, an employment record, a
+**Document / Verified** wage and an employer verification **Verified** by
+*Document* (verifier = source). If the trainee already has that employer, no
+duplicate is made and any Pending verification is resolved instead. The
+response counts `created`, `verified_existing`, `already_recorded`,
+`trainee_not_found`, `no_consent`, `no_training`, `invalid` and lists up to 50
+problem rows.
 
 ### 11.3 Link security
 - Signed with the server secret; include a purpose; expire after 30 days

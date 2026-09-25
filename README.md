@@ -127,6 +127,16 @@ All links are signed, expire after 30 days, and can never be used as a login.
 Follow-up and verification submissions work once only; the contact-update
 route can be used repeatedly until the link expires.
 
+**External employment signals:** `POST /api/employment-signals/import` (admin,
+multipart CSV + `source`, optional `dry_run`) loads placements from an outside
+source such as an EPFO/ESIC extract or a job-portal export. Columns:
+`trainee_id` | `phone` | `external_id` (`TYPE:VALUE`), `employer_name`,
+`start_date` (YYYY-MM-DD), optional `job_role`, `monthly_salary`, `reference`.
+Matched, consenting trainees get an Employed outcome, employment record, wage
+point and an employer verification marked *Verified* by *Document*. Existing
+employers are never duplicated (a Pending verification is just resolved), and a
+bad row is reported without failing the file.
+
 ## 7. Cross-programme identity
 
 - `trainee_id` is the one stable identity. IDs from other programmes
