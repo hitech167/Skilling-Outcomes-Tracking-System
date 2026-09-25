@@ -33,6 +33,9 @@ copy .env.example .env         # macOS/Linux: cp .env.example .env
 Fill in `DATABASE_URL`, `JWT_SECRET_KEY` (32+ random characters) and the
 admin/analyst credentials. `.env` is git-ignored — never commit it.
 
+**Frontend:** set `CORS_ORIGINS` in `.env` to the frontend's address(es),
+e.g. `http://localhost:5173`. Unset, the local dev ports 3000 and 5173 are allowed.
+
 ## 3. Run
 
 ```bash

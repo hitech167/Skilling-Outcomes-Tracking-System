@@ -22,6 +22,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -131,6 +132,26 @@ app = FastAPI(
     ),
     version="8.0.0",
     lifespan=lifespan,
+)
+
+# ---- CORS ------------------------------------------------------------
+# Browser frontends on another address need this. CORS_ORIGINS in .env is a
+# comma-separated list of allowed origins; unset = common local dev servers.
+# Auth is a bearer header, not cookies, so credentials are not allowed.
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
+)
+CORS_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in (os.getenv("CORS_ORIGINS") or DEFAULT_CORS_ORIGINS).split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=False,
 )
 
 # ---- Access control ------------------------------------------------
