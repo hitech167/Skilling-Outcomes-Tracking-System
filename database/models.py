@@ -656,3 +656,27 @@ class TraineeContactHistory(Base):
 
     def __repr__(self) -> str:
         return f"<TraineeContactHistory {self.field} ({self.source})>"
+
+
+class TraineeConsentHistory(Base):
+    """
+    Audit trail of consent: one row per grant / withdrawal. `source` is
+    registration | admin | self; `method` how it was captured (Paper form,
+    Digital form, Verbal, Self-service); `recorded_by` the staff member.
+    """
+
+    __tablename__ = "trainee_consent_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    trainee_pk_id = Column(
+        Integer, ForeignKey("trainees.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    consent_given = Column(Boolean, nullable=False)
+    source = Column(String(15), nullable=False)
+    method = Column(String(20), nullable=True)
+    recorded_by = Column(String(150), nullable=True)
+    notes = Column(String(255), nullable=True)
+    changed_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    def __repr__(self) -> str:
+        return f"<TraineeConsentHistory {self.consent_given} ({self.source})>"

@@ -9,7 +9,6 @@ POST  /api/trainees/{id}/consent  -> withdraw or re-grant consent
 """
 
 import logging
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
@@ -17,8 +16,8 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from database.connection import get_db
-from database.models import Trainee, TraineeContactHistory
-from services import contact_service, identity_service
+from database.models import Trainee, TraineeConsentHistory, TraineeContactHistory
+from services import consent_service, contact_service, identity_service
 from schemas.trainee import (
     ConsentUpdate,
     TraineeContact,
@@ -95,11 +94,13 @@ def register_trainee(payload: TraineeCreate, db: Session = Depends(get_db)):
             phone=payload.phone,
             email=str(payload.email) if payload.email else None,
             preferred_contact=payload.preferred_contact,
-            consent_given=payload.consent_given,
-            consent_date=datetime.now(timezone.utc),
         )
         db.add(trainee)
         db.flush()
+        consent_service.set_consent(
+            db, trainee, payload.consent_given, source="registration",
+            method=payload.consent_method, recorded_by=payload.consent_recorded_by,
+        )
         for ext in payload.external_ids:
             identity_service.link_external_id(
                 db, trainee, ext.id_type, ext.id_value, ext.source_programme
@@ -233,8 +234,10 @@ def update_consent(trainee_id: str, payload: ConsentUpdate, db: Session = Depend
     consent_date records when the current consent state was set.
     """
     trainee = _get_trainee_or_404(trainee_id, db)
-    trainee.consent_given = payload.consent_given
-    trainee.consent_date = datetime.now(timezone.utc)
+    consent_service.set_consent(
+        db, trainee, payload.consent_given, source="admin",
+        method=payload.method, recorded_by=payload.recorded_by, notes=payload.notes,
+    )
     _commit(db, "updating trainee consent")
     db.refresh(trainee)
     logger.info("Consent for %s set to %s", trainee.trainee_id, trainee.consent_given)
@@ -259,6 +262,31 @@ def contact_history(trainee_id: str, db: Session = Depends(get_db)):
             "old_value": r.old_value,
             "new_value": r.new_value,
             "source": r.source,
+            "changed_at": r.changed_at,
+        }
+        for r in rows
+    ]
+
+
+@router.get(
+    "/{trainee_id}/consent-history",
+    summary="Every consent grant / withdrawal with who recorded it and how, newest first",
+)
+def consent_history(trainee_id: str, db: Session = Depends(get_db)):
+    trainee = _get_trainee_or_404(trainee_id, db)
+    rows = (
+        db.query(TraineeConsentHistory)
+        .filter(TraineeConsentHistory.trainee_pk_id == trainee.id)
+        .order_by(TraineeConsentHistory.id.desc())
+        .all()
+    )
+    return [
+        {
+            "consent_given": r.consent_given,
+            "source": r.source,
+            "method": r.method,
+            "recorded_by": r.recorded_by,
+            "notes": r.notes,
             "changed_at": r.changed_at,
         }
         for r in rows

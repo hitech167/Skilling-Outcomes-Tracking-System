@@ -43,8 +43,8 @@ from schemas.self_service import (
     VerificationRequestCreate,
     VerificationRequestResponse,
 )
-from schemas.trainee import TraineeContactUpdate
-from services import contact_service, notification_service, self_service
+from schemas.trainee import SelfConsentUpdate, TraineeContactUpdate
+from services import consent_service, contact_service, notification_service, self_service
 from services.auth import (
     PURPOSE_EMPLOYER_VERIFY,
     PURPOSE_SELF_REPORT,
@@ -117,6 +117,16 @@ def self_contact_update(token: str, payload: TraineeContactUpdate, db: Session =
         )
     logger.info("Trainee %s updated own contact details (%s)", trainee.trainee_id, ", ".join(changed))
     return {"updated": changed}
+
+
+@public_router.post("/api/self-report/{token}/consent", summary="Trainee withdraws or re-grants their own consent")
+def self_consent_update(token: str, payload: SelfConsentUpdate, db: Session = Depends(get_db)):
+    followup_id = read_link_token(token, PURPOSE_SELF_REPORT)
+    _, trainee, _ = self_service.load_followup_context(db, followup_id)
+    consent_service.set_consent(db, trainee, payload.consent_given, source="self", method="Self-service")
+    db.commit()
+    logger.info("Trainee %s set own consent to %s", trainee.trainee_id, payload.consent_given)
+    return {"consent_given": trainee.consent_given}
 
 
 # =====================================================================

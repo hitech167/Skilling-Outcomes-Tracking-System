@@ -242,6 +242,7 @@ Problem, Relocation Issue, Personal/Family Reason, Further Education, Other.
 | Table | Purpose |
 |---|---|
 | `trainee_external_ids` | IDs from other programmes (`id_type`, `id_value`, `source_programme`); unique on (`id_type`, `id_value`) |
+| `trainee_consent_history` | One row per consent grant / withdrawal: `consent_given`, `source` (`registration` / `admin` / `self`), `method` (Paper form / Digital form / Verbal / Self-service), `recorded_by`, `notes`, `changed_at` |
 | `trainee_contact_history` | One row per changed contact field: `field`, `old_value`, `new_value`, `source` (`self` / `admin`), `changed_at` |
 | `notifications` | Outbox of automated messages: purpose, channel, recipient, message, status (Queued / Sent / Failed), provider, error, timestamps |
 
@@ -327,6 +328,7 @@ Access: **A** = admin, **A/An** = admin or analyst, **P** = public.
 | GET | `/api/trainees/{trainee_id}` | Profile without phone/email/DOB |
 | GET | `/api/trainees/{trainee_id}/contact` | Contact details for assisted follow-ups |
 | PATCH | `/api/trainees/{trainee_id}` | Update phone / email / district / location / preferred contact (logged to contact history) |
+| GET | `/api/trainees/{trainee_id}/consent-history` | Consent audit trail, newest first |
 | GET | `/api/trainees/{trainee_id}/contact-history` | Previous contact values, newest first |
 | POST | `/api/trainees/{trainee_id}/consent` | Withdraw (`false`) or re-grant (`true`) consent |
 
@@ -395,6 +397,7 @@ Access: **A** = admin, **A/An** = admin or analyst, **P** = public.
 |---|---|---|
 | GET | `/self-report/{token}` | Trainee mobile form (HTML) |
 | GET / POST | `/api/self-report/{token}` | Form context / submit |
+| POST | `/api/self-report/{token}/consent` | Trainee withdraws / re-grants own consent (logged, source `self`) |
 | GET / PATCH | `/api/self-report/{token}/contact` | Trainee views / updates own phone, email, district, location, preferred contact (409 if number taken, 403 if consent withdrawn) |
 | GET | `/employer-verify/{token}` | Employer form (HTML) |
 | GET / POST | `/api/employer-verify/{token}` | Form context / submit |
@@ -502,6 +505,16 @@ If the trainee reports the **same employer / business / apprenticeship**
 they already have, the existing record is extended (a new wage point only
 if the income changed; status back to Active if needed) instead of a
 duplicate being created.
+
+### 11.1b Consent evidence and self-service withdrawal
+Registration accepts optional `consent_method` and `consent_recorded_by`, so
+consent captured by staff (e.g. a signed paper form) is evidenced. Every
+grant or withdrawal - at registration, by staff (`POST .../consent`, with
+optional `method`, `recorded_by`, `notes`) or by the trainee
+(`POST /api/self-report/{token}/consent`) - is appended to
+`trainee_consent_history`; `trainees.consent_given` remains the flag the rest
+of the app checks. A trainee who has withdrawn can still re-grant from the
+same link.
 
 ### 11.1a Trainee contact changes
 `GET / PATCH /api/self-report/{token}/contact` lets a trainee change their

@@ -104,3 +104,38 @@ def test_no_employer_reminders_after_consent_withdrawn(isolated_db):
     admin.post(f"/api/trainees/{trainee_id}/consent", json={"consent_given": False})
     summary = admin.post("/api/verifications/remind-pending").json()
     assert summary["reminded"] == 0 and summary["skipped_no_consent"] == 1
+
+
+def test_consent_evidence_and_history(isolated_db):
+    trainee_id = make_trainee(consent_method="Paper form", consent_recorded_by="Officer Patil")
+    admin.post(
+        f"/api/trainees/{trainee_id}/consent",
+        json={"consent_given": False, "method": "Verbal", "recorded_by": "Officer Patil", "notes": "Called us"},
+    )
+    history = get_ok(admin, f"/api/trainees/{trainee_id}/consent-history")
+    assert [(h["source"], h["consent_given"]) for h in history] == [("admin", False), ("registration", True)]
+    assert history[1]["method"] == "Paper form" and history[1]["recorded_by"] == "Officer Patil"
+    assert history[0]["notes"] == "Called us"
+
+    bad = admin.post(f"/api/trainees/{trainee_id}/consent", json={"consent_given": True, "method": "Telepathy"})
+    assert bad.status_code == 422
+
+
+def test_trainee_withdraws_and_regrants_own_consent(isolated_db):
+    trainee_id = make_trainee()
+    token = _token_from(get_ok(admin, f"/api/followups/{_due_followup(trainee_id)}/self-report-link")["link"])
+
+    assert anon.post(f"/api/self-report/{token}/consent", json={"consent_given": False}).json() == {
+        "consent_given": False
+    }
+    assert get_ok(admin, f"/api/trainees/{trainee_id}")["consent_given"] is False
+    # withdrawn: no more contact updates, but the trainee can still re-grant
+    assert anon.patch(f"/api/self-report/{token}/contact", json={"district": "X"}).status_code == 403
+    assert anon.post(f"/api/self-report/{token}/consent", json={"consent_given": True}).status_code == 200
+
+    history = get_ok(admin, f"/api/trainees/{trainee_id}/consent-history")
+    assert [(h["source"], h["method"], h["consent_given"]) for h in history[:2]] == [
+        ("self", "Self-service", True),
+        ("self", "Self-service", False),
+    ]
+    assert anon.post("/api/self-report/garbage/consent", json={"consent_given": False}).status_code == 404

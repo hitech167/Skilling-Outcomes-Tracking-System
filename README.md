@@ -66,6 +66,12 @@ protected endpoints).
   can also change their own phone / location from their follow-up link
   (`PATCH /api/self-report/{token}/contact`, no login). Every change is
   kept in `trainee_contact_history` (`GET /api/trainees/{id}/contact-history`).
+- Consent is audited: every grant / withdrawal is logged in
+  `trainee_consent_history` (source `registration` / `admin` / `self`, method
+  such as *Paper form*, and who recorded it) - `GET /api/trainees/{id}/consent-history`.
+  Staff can record `consent_method` / `consent_recorded_by` at registration, and a
+  trainee can withdraw or re-grant their own consent from their link
+  (`POST /api/self-report/{token}/consent`, no login).
 - Registration requires `consent_given: true`; an explicit `false` for
   `consent_analytics` / `consent_privacy_notice` is refused, never ignored.
 - `POST /api/trainees/{id}/consent` withdraws or re-grants consent. With
