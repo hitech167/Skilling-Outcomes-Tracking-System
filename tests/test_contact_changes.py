@@ -230,3 +230,37 @@ def test_trainee_withdraws_and_regrants_own_consent(isolated_db):
         ("self", "Self-service", False),
     ]
     assert anon.post("/api/self-report/garbage/consent", json={"consent_given": False}).status_code == 404
+
+
+def test_trainee_can_see_own_record_masked_and_without_wages(isolated_db):
+    trainee_id = make_trainee(full_name="Sana Shaikh", email="sana@example.com", consent_method="Paper form")
+    phone = get_ok(admin, f"/api/trainees/{trainee_id}/contact")["phone"]
+    training_id = make_training(trainee_id)
+    outcome_id = make_outcome(trainee_id, training_id, "Employed")
+    employment_id = make_employment(trainee_id, outcome_id, salary=25000)
+    admin.post(f"/api/employment/{employment_id}/verification-request", json={"employer_contact": "hr@x.example"})
+    token = _profile_token(trainee_id)
+
+    record = get_ok(anon, f"/api/me/{token}/record")
+    profile = record["profile"]
+    assert profile["full_name"] == "Sana Shaikh" and profile["trainee_id"] == trainee_id
+    assert profile["phone"] != phone and profile["phone"][:2] == phone[:2] and profile["phone"][-2:] == phone[-2:]
+    assert profile["email"] == "s•••@example.com"
+    assert record["training"][0]["course"] == "Electrician"
+    assert record["outcomes"][0]["outcome"] == "Employed"
+    assert record["work"][0]["organisation"] == "Volt Works Pvt Ltd"
+    assert record["work"][0]["employer_confirmation"] == "Pending"
+    assert record["consent"]["given"] is True and record["consent"]["history"][0]["how"] == "Paper form"
+    assert record["consent"]["history"][0]["recorded_by"] == "Programme staff"
+
+    raw = anon.get(f"/api/me/{token}/record").text
+    assert phone not in raw and "sana@example.com" not in raw and "2002-04-10" not in raw
+    assert "25000" not in raw and "salary" not in raw
+
+    # own consent changes show up, attributed to the trainee
+    anon.post(f"/api/me/{token}/consent", json={"consent_given": False})
+    record = get_ok(anon, f"/api/me/{token}/record")  # still viewable after withdrawing
+    assert record["consent"]["given"] is False
+    assert record["consent"]["history"][0]["recorded_by"] == "You"
+
+    assert anon.get("/api/me/garbage/record").status_code == 404

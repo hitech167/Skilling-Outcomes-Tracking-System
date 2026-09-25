@@ -401,6 +401,7 @@ Access: **A** = admin, **A/An** = admin or analyst, **P** = public.
 | GET | `/self-report/{token}` | Trainee mobile form (HTML) |
 | GET / POST | `/api/self-report/{token}` | Form context / submit |
 | GET | `/my-profile/{token}` | Trainee profile page (HTML): phone, location, consent |
+| GET | `/api/me/{token}/record` | The trainee's own record: profile (phone / email masked), consent and its history, training, outcomes, work, follow-up status. No wages, DOB or verification details |
 | GET / PATCH | `/api/me/{token}/contact` | Profile link: view / update contact details (a new phone needs a code) |
 | POST | `/api/me/{token}/contact/verify` | Enter the 6-digit code sent to the new phone number |
 | POST | `/api/me/{token}/consent` | Withdraw / re-grant consent from the profile link |
@@ -531,6 +532,16 @@ request. Other fields apply immediately. Every change is logged in
 `trainee_contact_history`. Codes and messages go through the notification
 outbox, so without an SMS provider staff see the message in `GET
 /api/notifications` (filter `purpose=PHONE_VERIFICATION`) and must send it.
+
+### 11.1d What a trainee can see
+`GET /api/me/{token}/record` (shown on `/my-profile/{token}`) lets a trainee see
+what is held about them: name, gender, district / location, masked phone and
+email, consent status with its full history (given / withdrawn, when, how,
+recorded by *You* or *Programme staff*), their courses, outcomes, work
+(organisation, role, employer confirmation status) and follow-up status. The
+link is a bearer secret, so date of birth, wages / income and internal
+verification notes are deliberately left out. It stays viewable after consent
+is withdrawn.
 
 ### 11.1b Consent evidence and self-service withdrawal
 Registration accepts optional `consent_method` and `consent_recorded_by`, so
