@@ -108,10 +108,11 @@ class FollowUpNotReachableRequest(BaseModel):
 
 
 class FollowUpAttemptCreate(BaseModel):
-    attempt_date: date
-    contact_method: str
-    attempt_status: str
+    attempt_date: Optional[date] = Field(default_factory=date.today)
+    contact_method: Optional[str] = "Email"
+    attempt_status: Optional[str] = "Successful"
     notes: Optional[str] = Field(None, max_length=2000)
+    send_notification: Optional[bool] = True
 
     model_config = {
         "json_schema_extra": {
@@ -120,13 +121,16 @@ class FollowUpAttemptCreate(BaseModel):
                 "contact_method": "Phone",
                 "attempt_status": "No Response",
                 "notes": "Called twice but no response.",
+                "send_notification": True,
             }
         }
     }
 
     @field_validator("contact_method")
     @classmethod
-    def valid_contact_method(cls, value: str) -> str:
+    def valid_contact_method(cls, value: Optional[str]) -> str:
+        if not value:
+            return "Email"
         matched = next(
             (m for m in ALLOWED_CONTACT_METHODS if m.lower() == value.strip().lower()), None
         )
@@ -138,7 +142,9 @@ class FollowUpAttemptCreate(BaseModel):
 
     @field_validator("attempt_status")
     @classmethod
-    def valid_attempt_status(cls, value: str) -> str:
+    def valid_attempt_status(cls, value: Optional[str]) -> str:
+        if not value:
+            return "Successful"
         matched = next(
             (s for s in ALLOWED_ATTEMPT_STATUSES if s.lower() == value.strip().lower()), None
         )
@@ -156,6 +162,11 @@ class FollowUpAttemptResponse(BaseModel):
     contact_method: str
     attempt_status: str
     notes: Optional[str] = None
+    success: bool = True
+    db_logged: bool = True
+    email_sent: bool = False
+    message_sent: bool = False
+    message: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

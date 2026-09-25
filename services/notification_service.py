@@ -80,9 +80,92 @@ def _send_email(recipient: str, subject: str, body: str) -> str:
         if os.getenv("SMTP_STARTTLS", "true").lower() != "false":
             smtp.starttls()
         if os.getenv("SMTP_USERNAME"):
-            smtp.login(os.getenv("SMTP_USERNAME"), os.getenv("SMTP_PASSWORD", ""))
+            smtp.login(os.getenv("SMTP_USERNAME"), (os.getenv("SMTP_PASSWORD", "") or "").strip())
         smtp.send_message(message)
     return "smtp"
+
+
+def send_attempt_notification(
+    db: Session,
+    followup: FollowUp,
+    trainee: Trainee,
+    notes: str | None = None,
+) -> bool:
+    """
+    Send a notification containing the logged attempt notes directly to the trainee.
+    Prefers SMS if SMS gateway is configured, or SMTP email if configured.
+    Falls back to Email-to-SMS if SMS_EMAIL_GATEWAY is configured.
+    Returns True if notification was sent successfully, False otherwise.
+    """
+    has_smtp = bool(os.getenv("SMTP_HOST"))
+    has_sms = bool(os.getenv("SMS_WEBHOOK_URL"))
+    sms_email_gateway = os.getenv("SMS_EMAIL_GATEWAY")
+
+    channel = None
+    recipient = None
+
+    # Priority selection of notification channel
+    if has_sms and trainee.phone and trainee.preferred_contact in ("SMS", "WhatsApp"):
+        channel = "SMS"
+        recipient = trainee.phone
+    elif has_smtp and trainee.email:
+        channel = "Email"
+        recipient = trainee.email
+    elif has_sms and trainee.phone:
+        channel = "SMS"
+        recipient = trainee.phone
+    elif has_smtp and sms_email_gateway and trainee.phone:
+        channel = "Email"
+        clean_phone = trainee.phone.lstrip("+").strip()
+        recipient = f"{clean_phone}@{sms_email_gateway.lstrip('@').strip()}"
+    elif has_smtp and trainee.email:
+        channel = "Email"
+        recipient = trainee.email
+
+    if not channel or not recipient:
+        logger.info(
+            "No available notification channel for trainee %s (phone=%s, email=%s)",
+            trainee.trainee_id,
+            trainee.phone,
+            trainee.email,
+        )
+        return False
+
+    training = (
+        db.query(TrainingRecord)
+        .filter(TrainingRecord.id == followup.training_record_pk_id)
+        .first()
+    )
+    course_name = training.course_name if training else "Training Program"
+    label = FOLLOWUP_LABELS.get(followup.followup_type, followup.followup_type)
+    first_name = (trainee.full_name or "Trainee").split()[0]
+    notes_clean = (notes or "").strip() or "A follow-up contact attempt was logged by staff."
+
+    subject = f"Follow-up Update: {course_name} ({label} Check-in)"
+    body = (
+        f"Hello {first_name},\n\n"
+        f"This is an update regarding your {label} follow-up for the {course_name} course.\n\n"
+        f"Staff outreach notes:\n{notes_clean}\n\n"
+        f"If you have any questions or updates regarding your status, please feel free to reach out to us.\n\n"
+        f"Best regards,\nSkilling Outcomes Team"
+    )
+
+    try:
+        notification = Notification(
+            notification_id=generate_notification_id(db),
+            trainee_pk_id=trainee.id,
+            followup_pk_id=followup.id,
+            purpose="FOLLOWUP_ATTEMPT",
+            channel=channel,
+            recipient=recipient,
+            message=body,
+        )
+        deliver(notification, subject=subject)
+        db.add(notification)
+        return notification.status == "Sent"
+    except Exception as exc:
+        logger.warning("Error creating or delivering attempt notification: %s", exc)
+        return False
 
 
 def _send_sms(recipient: str, body: str) -> str:

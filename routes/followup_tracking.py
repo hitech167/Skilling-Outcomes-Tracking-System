@@ -65,6 +65,7 @@ from schemas.followup_tracking import (
     TraineeFollowupTimelineResponse,
 )
 from services import followup_scheduler
+from services.notification_service import send_attempt_notification
 
 logger = logging.getLogger(__name__)
 
@@ -365,15 +366,20 @@ def add_followup_attempt(
     followup_id: str, payload: FollowUpAttemptCreate, db: Session = Depends(get_db)
 ):
     followup = get_followup_or_404(followup_id, db)
-    _require_consent(get_trainee_or_404_by_pk(followup.trainee_pk_id, db))
+    trainee = get_trainee_or_404_by_pk(followup.trainee_pk_id, db)
+    _require_consent(trainee)
+
+    contact_method = payload.contact_method or "Email"
+    attempt_status = payload.attempt_status or "Successful"
+    attempt_date = payload.attempt_date or date.today()
 
     try:
         attempt = FollowUpAttempt(
             attempt_id=generate_attempt_id(db),
             followup_pk_id=followup.id,
-            attempt_date=payload.attempt_date,
-            contact_method=payload.contact_method,
-            attempt_status=payload.attempt_status,
+            attempt_date=attempt_date,
+            contact_method=contact_method,
+            attempt_status=attempt_status,
             notes=payload.notes,
         )
         db.add(attempt)
@@ -387,6 +393,32 @@ def add_followup_attempt(
             detail="Could not save the attempt right now. Please try again.",
         )
 
+    message_sent = False
+    if payload.send_notification:
+        try:
+            message_sent = send_attempt_notification(
+                db=db,
+                followup=followup,
+                trainee=trainee,
+                notes=payload.notes,
+            )
+            db.commit()
+        except Exception as exc:
+            logger.warning(
+                "Attempt notification failed for follow-up %s: %s",
+                followup.followup_id,
+                exc,
+            )
+            message_sent = False
+
+    email_sent = message_sent
+    if email_sent:
+        msg = "Attempt logged and email notification sent successfully."
+    elif payload.send_notification:
+        msg = "Attempt logged, but email notification could not be sent."
+    else:
+        msg = "Attempt logged successfully."
+
     return FollowUpAttemptResponse(
         attempt_id=attempt.attempt_id,
         followup_id=followup.followup_id,
@@ -394,6 +426,11 @@ def add_followup_attempt(
         contact_method=attempt.contact_method,
         attempt_status=attempt.attempt_status,
         notes=attempt.notes,
+        success=True,
+        db_logged=True,
+        email_sent=email_sent,
+        message_sent=message_sent,
+        message=msg,
     )
 
 
