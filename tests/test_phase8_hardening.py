@@ -204,7 +204,7 @@ def _concrete(path: str) -> str:
 
 def test_every_non_public_route_requires_authentication(isolated_db):
     public = {"/", "/api/system/health", "/api/auth/token",
-              "/api/self-report/{token}", "/api/employer-verify/{token}"}
+              "/api/self-report/{token}", "/api/self-report/{token}/contact", "/api/employer-verify/{token}"}
     checked = 0
     for route in app.routes:
         methods = getattr(route, "methods", None)

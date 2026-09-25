@@ -62,7 +62,10 @@ protected endpoints).
 ## 5. Privacy & consent
 
 - `trainee_id` (TRN000001…) is the permanent identity; phone/location can be
-  changed with `PATCH /api/trainees/{id}` without breaking history.
+  changed with `PATCH /api/trainees/{id}` without breaking history. Trainees
+  can also change their own phone / location from their follow-up link
+  (`PATCH /api/self-report/{token}/contact`, no login). Every change is
+  kept in `trainee_contact_history` (`GET /api/trainees/{id}/contact-history`).
 - Registration requires `consent_given: true`; an explicit `false` for
   `consent_analytics` / `consent_privacy_notice` is refused, never ignored.
 - `POST /api/trainees/{id}/consent` withdraws or re-grants consent. With
@@ -109,8 +112,14 @@ or rejects the employment, with current status and salary. That marks it
 *Verified* or *Rejected* via *Employer Portal* and records an
 *Employer, Verified* wage.
 
-All links are signed, expire after 30 days, work once only, and can never be
-used as a login.
+`POST /api/verifications/remind-pending` re-sends the link to employers who
+have not answered for 7 days. After 3 requests with no answer the
+verification becomes *Unable to Verify* ("Employer unresponsive"). It only
+runs when called, so schedule it (cron) if you want it automatic.
+
+All links are signed, expire after 30 days, and can never be used as a login.
+Follow-up and verification submissions work once only; the contact-update
+route can be used repeatedly until the link expires.
 
 ## 7. Cross-programme identity
 

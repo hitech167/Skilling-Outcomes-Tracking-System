@@ -33,12 +33,20 @@ from email.message import EmailMessage
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from database.models import FollowUp, Notification, Trainee, TrainingRecord
-from services.auth import PURPOSE_SELF_REPORT, create_link_token
+from database.models import (
+    EmployerVerification,
+    EmploymentRecord,
+    FollowUp,
+    Notification,
+    Trainee,
+    TrainingRecord,
+)
+from services.auth import PURPOSE_EMPLOYER_VERIFY, PURPOSE_SELF_REPORT, create_link_token
 
 logger = logging.getLogger(__name__)
 
 RESEND_AFTER_DAYS = 7
+EMPLOYER_MAX_REQUESTS = 3  # first request + 2 reminders
 LINK_VALID_DAYS = 30
 FOLLOWUP_LABELS = {
     "30_DAY": "30-day",
@@ -217,3 +225,64 @@ def dispatch_due_followups(db: Session, today: date | None = None) -> dict:
 
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def remind_pending_verifications(db: Session) -> dict:
+    """
+    For every Pending employer verification with a contact: if the last
+    request is older than RESEND_AFTER_DAYS, send a reminder with a fresh
+    link. After EMPLOYER_MAX_REQUESTS requests with still no answer, mark
+    it 'Unable to Verify' (employer unresponsive) so it is visible in the
+    data rather than silently pending forever.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=RESEND_AFTER_DAYS)
+    summary = {"reminded": 0, "marked_unresponsive": 0, "skipped_no_contact": 0, "notification_ids": []}
+
+    pending = db.query(EmployerVerification).filter(EmployerVerification.verification_status == "Pending").all()
+    for verification in pending:
+        contact = (verification.employer_contact or "").strip()
+        if not contact:
+            summary["skipped_no_contact"] += 1
+            continue
+        sent = (
+            db.query(Notification)
+            .filter(
+                Notification.purpose == "EMPLOYER_VERIFICATION",
+                Notification.trainee_pk_id == verification.trainee_pk_id,
+                Notification.recipient == contact,
+            )
+            .order_by(Notification.id)
+            .all()
+        )
+        if not sent or _aware(sent[-1].created_at) > cutoff:
+            continue
+
+        if len(sent) >= EMPLOYER_MAX_REQUESTS:
+            verification.verification_status = "Unable to Verify"
+            verification.verification_notes = (
+                f"Employer unresponsive after {len(sent)} confirmation requests."
+            )
+            summary["marked_unresponsive"] += 1
+            continue
+
+        employment = db.query(EmploymentRecord).filter(EmploymentRecord.id == verification.employment_pk_id).one()
+        token = create_link_token(PURPOSE_EMPLOYER_VERIFY, verification.verification_id, LINK_VALID_DAYS)
+        notification = Notification(
+            notification_id=generate_notification_id(db),
+            trainee_pk_id=verification.trainee_pk_id,
+            purpose="EMPLOYER_VERIFICATION",
+            channel="Email" if "@" in contact else "SMS",
+            recipient=contact,
+            message=(
+                f"Reminder: please confirm the employment of a trainee at {employment.company_name} "
+                f"({employment.job_role}). It takes one minute: {public_base_url()}/employer-verify/{token}"
+            ),
+        )
+        deliver(notification, subject="Reminder: employment confirmation request")
+        db.add(notification)
+        db.flush()
+        summary["reminded"] += 1
+        summary["notification_ids"].append(notification.notification_id)
+
+    db.commit()
+    return summary

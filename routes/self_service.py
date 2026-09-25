@@ -23,6 +23,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from database.connection import get_db
@@ -42,7 +43,8 @@ from schemas.self_service import (
     VerificationRequestCreate,
     VerificationRequestResponse,
 )
-from services import notification_service, self_service
+from schemas.trainee import TraineeContactUpdate
+from services import contact_service, notification_service, self_service
 from services.auth import (
     PURPOSE_EMPLOYER_VERIFY,
     PURPOSE_SELF_REPORT,
@@ -84,6 +86,39 @@ def self_report_submit(token: str, payload: SelfReportSubmission, db: Session = 
     return SelfReportResult()
 
 
+@public_router.get("/api/self-report/{token}/contact", summary="Trainee's current location and contact preference")
+def self_contact_context(token: str, db: Session = Depends(get_db)):
+    followup_id = read_link_token(token, PURPOSE_SELF_REPORT)
+    _, trainee, _ = self_service.load_followup_context(db, followup_id)
+    return {
+        "first_name": trainee.full_name.split()[0],
+        "district": trainee.district,
+        "current_location": trainee.current_location,
+        "preferred_contact": trainee.preferred_contact,
+    }
+
+
+@public_router.patch("/api/self-report/{token}/contact", summary="Trainee updates their own phone / location")
+def self_contact_update(token: str, payload: TraineeContactUpdate, db: Session = Depends(get_db)):
+    followup_id = read_link_token(token, PURPOSE_SELF_REPORT)
+    _, trainee, _ = self_service.load_followup_context(db, followup_id)
+    if not trainee.consent_given:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Consent has been withdrawn.")
+    changed = contact_service.apply_contact_update(
+        db, trainee, payload.model_dump(exclude_unset=True), source="self"
+    )
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That phone number or email is already registered to someone else.",
+        )
+    logger.info("Trainee %s updated own contact details (%s)", trainee.trainee_id, ", ".join(changed))
+    return {"updated": changed}
+
+
 # =====================================================================
 # Public: employer confirmation
 # =====================================================================
@@ -122,6 +157,14 @@ def employer_verify_submit(token: str, payload: EmployerVerifySubmission, db: Se
 )
 def dispatch_due_followups(db: Session = Depends(get_db)):
     return notification_service.dispatch_due_followups(db)
+
+
+@admin_router.post(
+    "/api/verifications/remind-pending",
+    summary="Re-send employer confirmation links; mark employers unresponsive after repeated silence",
+)
+def remind_pending_verifications(db: Session = Depends(get_db)):
+    return notification_service.remind_pending_verifications(db)
 
 
 @admin_router.get(

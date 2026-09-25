@@ -633,3 +633,26 @@ class Notification(Base):
 
     def __repr__(self) -> str:
         return f"<Notification {self.notification_id} ({self.channel} {self.status})>"
+
+
+class TraineeContactHistory(Base):
+    """
+    One row per changed contact field, so an old phone number or district
+    is never lost when a trainee moves or changes number. `source` is
+    'self' (trainee used their link) or 'admin' (staff edited it).
+    """
+
+    __tablename__ = "trainee_contact_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    trainee_pk_id = Column(
+        Integer, ForeignKey("trainees.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    field = Column(String(30), nullable=False)
+    old_value = Column(String(255), nullable=True)
+    new_value = Column(String(255), nullable=True)
+    source = Column(String(10), nullable=False)
+    changed_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    def __repr__(self) -> str:
+        return f"<TraineeContactHistory {self.field} ({self.source})>"

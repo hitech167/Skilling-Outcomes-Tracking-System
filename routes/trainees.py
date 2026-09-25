@@ -17,8 +17,8 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from database.connection import get_db
-from database.models import Trainee
-from services import identity_service
+from database.models import Trainee, TraineeContactHistory
+from services import contact_service, identity_service
 from schemas.trainee import (
     ConsentUpdate,
     TraineeContact,
@@ -211,24 +211,11 @@ def update_trainee_contact(
 ):
     trainee = _get_trainee_or_404(trainee_id, db)
     updates = payload.model_dump(exclude_unset=True)
-
-    # phone, district and preferred_contact are required columns: an
-    # explicit null is not allowed to wipe them.
-    for field in ("phone", "district", "preferred_contact"):
-        if field in updates and updates[field] is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"{field} cannot be empty",
-            )
-
-    if "email" in updates and updates["email"] is not None:
-        updates["email"] = str(updates["email"])
-    for field, value in updates.items():
-        setattr(trainee, field, value)
+    changed = contact_service.apply_contact_update(db, trainee, updates, source="admin")
 
     _commit(db, "updating trainee contact details")
     db.refresh(trainee)
-    logger.info("Updated contact details for %s (%s)", trainee.trainee_id, ", ".join(updates))
+    logger.info("Updated contact details for %s (%s)", trainee.trainee_id, ", ".join(changed))
     return trainee
 
 
@@ -252,3 +239,27 @@ def update_consent(trainee_id: str, payload: ConsentUpdate, db: Session = Depend
     db.refresh(trainee)
     logger.info("Consent for %s set to %s", trainee.trainee_id, trainee.consent_given)
     return trainee
+
+
+@router.get(
+    "/{trainee_id}/contact-history",
+    summary="Previous phone / email / district values, newest first",
+)
+def contact_history(trainee_id: str, db: Session = Depends(get_db)):
+    trainee = _get_trainee_or_404(trainee_id, db)
+    rows = (
+        db.query(TraineeContactHistory)
+        .filter(TraineeContactHistory.trainee_pk_id == trainee.id)
+        .order_by(TraineeContactHistory.id.desc())
+        .all()
+    )
+    return [
+        {
+            "field": r.field,
+            "old_value": r.old_value,
+            "new_value": r.new_value,
+            "source": r.source,
+            "changed_at": r.changed_at,
+        }
+        for r in rows
+    ]
