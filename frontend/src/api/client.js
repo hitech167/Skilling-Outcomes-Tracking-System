@@ -1,15 +1,15 @@
 const BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
 function getToken() {
-    return localStorage.getItem("token");
+    return sessionStorage.getItem("token");
 }
 
 export function setToken(token) {
-    localStorage.setItem("token", token);
+    sessionStorage.setItem("token", token);
 }
 
 export function clearToken() {
-    localStorage.removeItem("token");
+    sessionStorage.removeItem("token");
 }
 
 async function request(path, options = {}) {
@@ -28,7 +28,7 @@ async function request(path, options = {}) {
 
     if (!response.ok) {
         const errorBody = await response.json().catch(() => ({}));
-        throw new Error(errorBody.detail || `Request failed: ${response.status}`);
+        throw { status: response.status, detail: errorBody.detail };
     }
 
     if (response.status === 204) return null;
@@ -41,6 +41,7 @@ export const api = {
     patch: (path, body) => request(path, { method: "PATCH", body: JSON.stringify(body) }),
     delete: (path) => request(path, { method: "DELETE" }),
 };
+
 export async function login(username, password) {
     const body = new URLSearchParams();
     body.append("grant_type", "password");
@@ -55,10 +56,18 @@ export async function login(username, password) {
 
     if (!response.ok) {
         const errorBody = await response.json().catch(() => ({}));
-        throw new Error(errorBody.detail || "Login failed");
+        throw { status: response.status, detail: errorBody.detail };
     }
 
     const data = await response.json();
     setToken(data.access_token);
     return data;
+}
+
+export async function getMe() {
+    return api.get("/api/auth/me");
+}
+
+export function logout() {
+    clearToken();
 }
