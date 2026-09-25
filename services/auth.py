@@ -145,6 +145,7 @@ require_analytics_access = require_roles(ROLE_ADMIN, ROLE_ANALYST)
 
 PURPOSE_SELF_REPORT = "self_report"
 PURPOSE_EMPLOYER_VERIFY = "employer_verify"
+PURPOSE_PROFILE = "profile"
 
 
 def create_link_token(purpose: str, subject: str, valid_days: int = 30) -> str:

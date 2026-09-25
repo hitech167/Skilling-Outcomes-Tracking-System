@@ -67,7 +67,7 @@ def test_dispatch_messages_due_followups_by_preferred_channel(isolated_db):
     # No SMTP / SMS provider in tests -> everything waits in the outbox
     assert (summary["queued"], summary["sent"], summary["failed"]) == (3, 0, 0)
 
-    outbox = get_ok(admin, "/api/notifications", params={"status": "Queued", "limit": 500})
+    outbox = get_ok(admin, "/api/notifications", params={"status": "Queued", "purpose": "FOLLOWUP_REQUEST", "limit": 500})
     assert len(outbox) == 3
     assert "12-month check-in" in outbox[0]["message"]
     channels = {(n["trainee_id"], n["channel"]) for n in outbox}
@@ -106,6 +106,7 @@ def test_dispatch_uses_configured_providers(isolated_db, monkeypatch):
 
     _due_followup(make_trainee(preferred_contact="Email", email="a@example.com"))
     _due_followup(make_trainee(preferred_contact="SMS"))
+    sent.clear()  # ignore the welcome messages sent at registration
     summary = admin.post("/api/followups/dispatch-due").json()
     assert (summary["sent"], summary["failed"]) == (1, 1)
     assert sent == [("email", "a@example.com")]

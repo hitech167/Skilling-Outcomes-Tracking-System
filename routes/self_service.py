@@ -23,7 +23,6 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from database.connection import get_db
@@ -43,7 +42,7 @@ from schemas.self_service import (
     VerificationRequestCreate,
     VerificationRequestResponse,
 )
-from schemas.trainee import SelfConsentUpdate, TraineeContactUpdate
+from schemas.trainee import PhoneVerifyRequest, SelfConsentUpdate, TraineeContactUpdate
 from services import consent_service, contact_service, notification_service, self_service
 from services.auth import (
     PURPOSE_EMPLOYER_VERIFY,
@@ -98,25 +97,20 @@ def self_contact_context(token: str, db: Session = Depends(get_db)):
     }
 
 
-@public_router.patch("/api/self-report/{token}/contact", summary="Trainee updates their own phone / location")
+@public_router.patch("/api/self-report/{token}/contact", summary="Trainee updates their own contact details (a new phone needs a code)")
 def self_contact_update(token: str, payload: TraineeContactUpdate, db: Session = Depends(get_db)):
     followup_id = read_link_token(token, PURPOSE_SELF_REPORT)
     _, trainee, _ = self_service.load_followup_context(db, followup_id)
-    if not trainee.consent_given:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Consent has been withdrawn.")
-    changed = contact_service.apply_contact_update(
-        db, trainee, payload.model_dump(exclude_unset=True), source="self"
-    )
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="That phone number or email is already registered to someone else.",
-        )
-    logger.info("Trainee %s updated own contact details (%s)", trainee.trainee_id, ", ".join(changed))
-    return {"updated": changed}
+    result = contact_service.self_update(db, trainee, payload.model_dump(exclude_unset=True))
+    logger.info("Trainee %s updated own contact details", trainee.trainee_id)
+    return result
+
+
+@public_router.post("/api/self-report/{token}/contact/verify", summary="Confirm a new phone number with the code sent to it")
+def self_contact_verify(token: str, payload: PhoneVerifyRequest, db: Session = Depends(get_db)):
+    followup_id = read_link_token(token, PURPOSE_SELF_REPORT)
+    _, trainee, _ = self_service.load_followup_context(db, followup_id)
+    return contact_service.verify_phone_change(db, trainee, payload.code)
 
 
 @public_router.post("/api/self-report/{token}/consent", summary="Trainee withdraws or re-grants their own consent")
@@ -262,10 +256,13 @@ def _notification_item(n: Notification, db: Session) -> NotificationItem:
 )
 def list_notifications(
     status_filter: Optional[str] = Query(None, alias="status"),
+    purpose: Optional[str] = Query(None, description="e.g. FOLLOWUP_REQUEST, EMPLOYER_VERIFICATION, PROFILE_LINK, PHONE_VERIFICATION"),
     limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
 ):
     query = db.query(Notification)
+    if purpose:
+        query = query.filter(Notification.purpose == purpose.strip().upper())
     if status_filter:
         query = query.filter(Notification.status == status_filter.strip().capitalize())
     rows = query.order_by(Notification.id.desc()).limit(limit).all()

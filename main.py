@@ -43,6 +43,7 @@ from routes import (
     insights,
     non_placement,
     outcomes,
+    profile_links,
     self_employment,
     self_service,
     trainees,
@@ -144,6 +145,7 @@ ANALYTICS_ACCESS = [Depends(require_analytics_access)]
 app.include_router(auth.router)
 # Signed single-use links for trainees / employers — no login by design.
 app.include_router(self_service.public_router)
+app.include_router(profile_links.public_router)
 app.include_router(identity.router, dependencies=ADMIN_ONLY)
 app.include_router(self_service.admin_router, dependencies=ADMIN_ONLY)
 app.include_router(trainees.router, dependencies=ADMIN_ONLY)

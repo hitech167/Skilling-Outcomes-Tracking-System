@@ -4,7 +4,8 @@ Trainee self-service contact updates, contact history, and employer reminders.
 
 from datetime import datetime, timedelta, timezone
 
-from database.models import Notification
+from database.models import Notification, PhoneChangeRequest
+from services import contact_service
 from tests.test_gap_features import _due_followup, _token_from
 from tests.test_phase8_hardening import (
     admin,
@@ -18,7 +19,8 @@ from tests.test_phase8_hardening import (
 )
 
 
-def test_trainee_updates_own_contact_and_history_is_kept(isolated_db):
+def test_trainee_updates_own_contact_and_history_is_kept(isolated_db, monkeypatch):
+    monkeypatch.setattr(contact_service, "_new_code", lambda: "123456")
     trainee_id = make_trainee(full_name="Sana Shaikh")
     old_phone = get_ok(admin, f"/api/trainees/{trainee_id}/contact")["phone"]
     followup_id = _due_followup(trainee_id)
@@ -30,9 +32,16 @@ def test_trainee_updates_own_contact_and_history_is_kept(isolated_db):
     new = new_phone()
     res = anon.patch(f"/api/self-report/{token}/contact", json={"phone": new, "district": "Nagpur"})
     assert res.status_code == 200, res.text
-    assert set(res.json()["updated"]) == {"phone", "district"}
+    assert res.json() == {"updated": ["district"], "phone_verification_sent": True}
+    # not switched until the code is entered
+    assert get_ok(admin, f"/api/trainees/{trainee_id}/contact")["phone"] == old_phone
 
+    assert anon.post(f"/api/self-report/{token}/contact/verify", json={"code": "000000"}).status_code == 400
+    assert anon.post(f"/api/self-report/{token}/contact/verify", json={"code": "123456"}).status_code == 200
     assert get_ok(admin, f"/api/trainees/{trainee_id}/contact")["phone"] == new
+    # the code works once
+    assert anon.post(f"/api/self-report/{token}/contact/verify", json={"code": "123456"}).status_code == 404
+
     history = get_ok(admin, f"/api/trainees/{trainee_id}/contact-history")
     phone_row = next(h for h in history if h["field"] == "phone")
     assert phone_row["old_value"] == old_phone and phone_row["new_value"] == new
@@ -56,6 +65,88 @@ def test_self_contact_update_rejects_bad_token_duplicate_and_withdrawn(isolated_
 
     admin.post(f"/api/trainees/{a}/consent", json={"consent_given": False})
     assert anon.patch(f"/api/self-report/{token}/contact", json={"district": "X"}).status_code == 403
+
+
+def _profile_token(trainee_id):
+    return _token_from(get_ok(admin, f"/api/trainees/{trainee_id}/profile-link")["link"])
+
+
+def test_profile_link_from_registration_changes_phone_with_code(isolated_db, monkeypatch):
+    monkeypatch.setattr(contact_service, "_new_code", lambda: "424242")
+    res = admin.post(
+        "/api/trainees",
+        json={
+            "full_name": "Asha Rane", "dob": "2003-01-02", "gender": "Female", "district": "Pune",
+            "phone": new_phone(), "preferred_contact": "SMS", "consent_given": True,
+        },
+    )
+    assert res.status_code == 201
+    token = _token_from(res.json()["profile_link"])
+    trainee_id = res.json()["trainee_id"]
+    assert "/my-profile/" in res.json()["profile_link"]
+
+    # welcome message queued for the trainee, with the link
+    welcome = get_ok(admin, "/api/notifications", params={"purpose": "PROFILE_LINK"})
+    assert welcome and token in welcome[0]["message"]
+
+    assert anon.get(f"/my-profile/{token}").status_code == 200
+    assert get_ok(anon, f"/api/me/{token}/contact")["district"] == "Pune"
+
+    new = new_phone()
+    assert anon.patch(f"/api/me/{token}/contact", json={"phone": new}).json()["phone_verification_sent"] is True
+    code_msg = get_ok(admin, "/api/notifications", params={"purpose": "PHONE_VERIFICATION"})[0]
+    assert code_msg["recipient"] == new and "424242" in code_msg["message"]
+
+    assert anon.post(f"/api/me/{token}/contact/verify", json={"code": "424242"}).status_code == 200
+    assert get_ok(admin, f"/api/trainees/{trainee_id}/contact")["phone"] == new
+
+
+def test_phone_code_expires_and_locks_after_wrong_attempts(isolated_db, monkeypatch):
+    monkeypatch.setattr(contact_service, "_new_code", lambda: "111111")
+    trainee_id = make_trainee()
+    token = _profile_token(trainee_id)
+    anon.patch(f"/api/me/{token}/contact", json={"phone": new_phone()})
+    for _ in range(5):
+        assert anon.post(f"/api/me/{token}/contact/verify", json={"code": "222222"}).status_code == 400
+    assert anon.post(f"/api/me/{token}/contact/verify", json={"code": "111111"}).status_code == 429
+
+    anon.patch(f"/api/me/{token}/contact", json={"phone": new_phone()})
+    db = isolated_db()
+    for r in db.query(PhoneChangeRequest).all():
+        r.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    db.commit()
+    db.close()
+    assert anon.post(f"/api/me/{token}/contact/verify", json={"code": "111111"}).status_code == 410
+    assert anon.post(f"/api/me/{token}/contact/verify", json={"code": "12ab56"}).status_code == 422
+
+
+def test_profile_link_consent_and_wrong_token_type(isolated_db):
+    trainee_id = make_trainee()
+    token = _profile_token(trainee_id)
+    assert anon.post(f"/api/me/{token}/consent", json={"consent_given": False}).json() == {"consent_given": False}
+    assert anon.patch(f"/api/me/{token}/contact", json={"district": "X"}).status_code == 403
+    assert anon.post(f"/api/me/{token}/consent", json={"consent_given": True}).status_code == 200
+
+    # a follow-up link is not a profile link, and vice versa
+    followup_token = _token_from(get_ok(admin, f"/api/followups/{_due_followup(trainee_id)}/self-report-link")["link"])
+    assert anon.get(f"/api/me/{followup_token}/contact").status_code == 404
+    assert anon.get(f"/api/self-report/{token}/contact").status_code == 404
+    assert anon.get("/api/me/garbage/contact").status_code == 404
+
+
+def test_request_link_is_uniform_and_rate_limited(isolated_db):
+    trainee_id = make_trainee()
+    phone = get_ok(admin, f"/api/trainees/{trainee_id}/contact")["phone"]
+    before = len(get_ok(admin, "/api/notifications", params={"purpose": "PROFILE_LINK"}))
+
+    known = anon.post("/api/request-link", json={"identifier": phone})
+    unknown = anon.post("/api/request-link", json={"identifier": "9999999999"})
+    assert known.status_code == unknown.status_code == 200 and known.json() == unknown.json()
+
+    after = get_ok(admin, "/api/notifications", params={"purpose": "PROFILE_LINK"})
+    assert len(after) == before  # the welcome message just sent counts as recent: no second one
+    anon.post("/api/request-link", json={"identifier": trainee_id.lower()})
+    assert len(get_ok(admin, "/api/notifications", params={"purpose": "PROFILE_LINK"})) == len(after)
 
 
 def test_employer_reminders_then_marked_unresponsive(isolated_db):

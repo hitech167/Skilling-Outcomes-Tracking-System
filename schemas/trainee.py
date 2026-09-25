@@ -194,6 +194,18 @@ class ConsentUpdate(BaseModel):
     notes: Optional[str] = Field(None, max_length=255)
 
 
+class PhoneVerifyRequest(BaseModel):
+    """Body of POST /api/me/{token}/contact/verify."""
+
+    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class LinkRequest(BaseModel):
+    """Body of POST /api/request-link: a trainee ID or the phone number on file."""
+
+    identifier: str = Field(..., min_length=3, max_length=30)
+
+
 class SelfConsentUpdate(BaseModel):
     """Body of POST /api/self-report/{token}/consent (trainee withdraws or re-grants)."""
 
@@ -227,6 +239,9 @@ class TraineeCreateResponse(BaseModel):
     # Existing trainees with the same name and date of birth — a warning
     # for the admin to review, not an error.
     possible_duplicates: list[str] = []
+    # Personal link the trainee can use to update their phone / location or
+    # withdraw consent at any time (also sent to them as a welcome message).
+    profile_link: Optional[str] = None
 
 
 class TraineePublic(BaseModel):

@@ -242,6 +242,7 @@ Problem, Relocation Issue, Personal/Family Reason, Further Education, Other.
 | Table | Purpose |
 |---|---|
 | `trainee_external_ids` | IDs from other programmes (`id_type`, `id_value`, `source_programme`); unique on (`id_type`, `id_value`) |
+| `phone_change_requests` | A phone change waiting for its 6-digit code: `new_phone`, hashed code, `expires_at` (15 min), `attempts` (max 5); one per trainee |
 | `trainee_consent_history` | One row per consent grant / withdrawal: `consent_given`, `source` (`registration` / `admin` / `self`), `method` (Paper form / Digital form / Verbal / Self-service), `recorded_by`, `notes`, `changed_at` |
 | `trainee_contact_history` | One row per changed contact field: `field`, `old_value`, `new_value`, `source` (`self` / `admin`), `changed_at` |
 | `notifications` | Outbox of automated messages: purpose, channel, recipient, message, status (Queued / Sent / Failed), provider, error, timestamps |
@@ -328,6 +329,7 @@ Access: **A** = admin, **A/An** = admin or analyst, **P** = public.
 | GET | `/api/trainees/{trainee_id}` | Profile without phone/email/DOB |
 | GET | `/api/trainees/{trainee_id}/contact` | Contact details for assisted follow-ups |
 | PATCH | `/api/trainees/{trainee_id}` | Update phone / email / district / location / preferred contact (logged to contact history) |
+| GET | `/api/trainees/{trainee_id}/profile-link` | Trainee's personal profile link (§11.1c) |
 | GET | `/api/trainees/{trainee_id}/consent-history` | Consent audit trail, newest first |
 | GET | `/api/trainees/{trainee_id}/contact-history` | Previous contact values, newest first |
 | POST | `/api/trainees/{trainee_id}/consent` | Withdraw (`false`) or re-grant (`true`) consent |
@@ -398,6 +400,12 @@ Access: **A** = admin, **A/An** = admin or analyst, **P** = public.
 |---|---|---|
 | GET | `/self-report/{token}` | Trainee mobile form (HTML) |
 | GET / POST | `/api/self-report/{token}` | Form context / submit |
+| GET | `/my-profile/{token}` | Trainee profile page (HTML): phone, location, consent |
+| GET / PATCH | `/api/me/{token}/contact` | Profile link: view / update contact details (a new phone needs a code) |
+| POST | `/api/me/{token}/contact/verify` | Enter the 6-digit code sent to the new phone number |
+| POST | `/api/me/{token}/consent` | Withdraw / re-grant consent from the profile link |
+| POST | `/api/request-link` | "Send me my link again" (trainee ID or phone); same reply whether or not it matches |
+| POST | `/api/self-report/{token}/contact/verify` | Same code check, from a follow-up link |
 | POST | `/api/self-report/{token}/consent` | Trainee withdraws / re-grants own consent (logged, source `self`) |
 | GET / PATCH | `/api/self-report/{token}/contact` | Trainee views / updates own phone, email, district, location, preferred contact (409 if number taken, 403 if consent withdrawn) |
 | GET | `/employer-verify/{token}` | Employer form (HTML) |
@@ -506,6 +514,23 @@ If the trainee reports the **same employer / business / apprenticeship**
 they already have, the existing record is extended (a new wage point only
 if the income changed; status back to Active if needed) instead of a
 duplicate being created.
+
+### 11.1c Profile link and phone-number verification
+Registration creates a **profile link** (`/my-profile/{token}`, purpose
+`profile`, valid 548 days) that is returned to staff in the response and sent
+to the trainee as a welcome message; follow-up messages repeat it. It lets the
+trainee change district, location, contact preference and phone, and
+withdraw / re-grant consent, from day one - not only when a follow-up link
+arrives. `POST /api/request-link` re-sends it to the phone / email on file (at
+most once an hour per trainee, identical reply for unknown details).
+
+A **new phone number is not applied straight away**: a 6-digit code is sent to
+the new number and stored only as an HMAC. The change is saved when the code
+is entered (`.../contact/verify`) within 15 minutes; 5 wrong codes cancel the
+request. Other fields apply immediately. Every change is logged in
+`trainee_contact_history`. Codes and messages go through the notification
+outbox, so without an SMS provider staff see the message in `GET
+/api/notifications` (filter `purpose=PHONE_VERIFICATION`) and must send it.
 
 ### 11.1b Consent evidence and self-service withdrawal
 Registration accepts optional `consent_method` and `consent_recorded_by`, so

@@ -63,8 +63,11 @@ protected endpoints).
 
 - `trainee_id` (TRN000001…) is the permanent identity; phone/location can be
   changed with `PATCH /api/trainees/{id}` without breaking history. Trainees
-  can also change their own phone / location from their follow-up link
-  (`PATCH /api/self-report/{token}/contact`, no login). Every change is
+  can also change their own phone / location without a login, using the
+  **profile link** they get at registration (`/my-profile/{token}`, valid ~18
+  months, re-sent on request with `POST /api/request-link`) or any follow-up
+  link. A new phone number is only saved after the trainee enters a 6-digit
+  code sent to that new number. Every change is
   kept in `trainee_contact_history` (`GET /api/trainees/{id}/contact-history`).
 - Consent is audited: every grant / withdrawal is logged in
   `trainee_consent_history` (source `registration` / `admin` / `self`, method

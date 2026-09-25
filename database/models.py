@@ -680,3 +680,23 @@ class TraineeConsentHistory(Base):
 
     def __repr__(self) -> str:
         return f"<TraineeConsentHistory {self.consent_given} ({self.source})>"
+
+
+class PhoneChangeRequest(Base):
+    """
+    A phone-number change the trainee asked for, waiting for the 6-digit
+    code sent to the NEW number. The code is stored hashed. One active
+    request per trainee.
+    """
+
+    __tablename__ = "phone_change_requests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    trainee_pk_id = Column(
+        Integer, ForeignKey("trainees.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    new_phone = Column(String(15), nullable=False)
+    code_hash = Column(String(64), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    attempts = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -41,13 +41,15 @@ from database.models import (
     Trainee,
     TrainingRecord,
 )
-from services.auth import PURPOSE_EMPLOYER_VERIFY, PURPOSE_SELF_REPORT, create_link_token
+from services.auth import PURPOSE_EMPLOYER_VERIFY, PURPOSE_PROFILE, PURPOSE_SELF_REPORT, create_link_token
 
 logger = logging.getLogger(__name__)
 
 RESEND_AFTER_DAYS = 7
 EMPLOYER_MAX_REQUESTS = 3  # first request + 2 reminders
 LINK_VALID_DAYS = 30
+PROFILE_LINK_DAYS = 548  # about 18 months: covers the 12-month follow-up
+PROFILE_LINK_RESEND_HOURS = 1
 FOLLOWUP_LABELS = {
     "30_DAY": "30-day",
     "90_DAY": "90-day",
@@ -63,6 +65,11 @@ def public_base_url() -> str:
 def generate_notification_id(db: Session) -> str:
     next_number = db.execute(text("SELECT nextval('notification_id_seq')")).scalar()
     return f"NTF{next_number:06d}"
+
+
+def profile_link(trainee: Trainee) -> str:
+    token = create_link_token(PURPOSE_PROFILE, trainee.trainee_id, PROFILE_LINK_DAYS)
+    return f"{public_base_url()}/my-profile/{token}"
 
 
 def self_report_link(followup: FollowUp) -> str:
@@ -153,7 +160,8 @@ def _followup_message(trainee: Trainee, training: TrainingRecord, followup: Foll
     return (
         f"Hello {first_name}, this is your {label} check-in after the "
         f"{training.course_name} course. Please tell us how you are doing "
-        f"(takes 1 minute): {link}"
+        f"(takes 1 minute): {link} . Changed your phone or moved? Update it here: "
+        f"{profile_link(trainee)}"
     )
 
 
@@ -290,3 +298,35 @@ def remind_pending_verifications(db: Session) -> dict:
 
     db.commit()
     return summary
+
+
+def send_profile_link(db: Session, trainee: Trainee, welcome: bool = False):
+    """Message the trainee their personal profile link. Caller commits."""
+    channel, recipient = _channel_and_recipient(trainee)
+    first_name = trainee.full_name.split()[0]
+    intro = "welcome to the skilling programme" if welcome else "here is your personal link"
+    notification = Notification(
+        notification_id=generate_notification_id(db),
+        trainee_pk_id=trainee.id,
+        purpose="PROFILE_LINK",
+        channel=channel,
+        recipient=recipient,
+        message=(
+            f"Hello {first_name}, {intro}. Use this link any time to "
+            f"update your phone number or location, or to change your consent: {profile_link(trainee)}"
+        ),
+    )
+    deliver(notification, subject="Your training profile link")
+    db.add(notification)
+    return notification
+
+
+def profile_link_recently_sent(db: Session, trainee: Trainee) -> bool:
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=PROFILE_LINK_RESEND_HOURS)
+    latest = (
+        db.query(Notification)
+        .filter(Notification.trainee_pk_id == trainee.id, Notification.purpose == "PROFILE_LINK")
+        .order_by(Notification.id.desc())
+        .first()
+    )
+    return latest is not None and latest.created_at is not None and _aware(latest.created_at) >= cutoff

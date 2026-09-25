@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from database.connection import get_db
 from database.models import Trainee, TraineeConsentHistory, TraineeContactHistory
-from services import consent_service, contact_service, identity_service
+from services import consent_service, contact_service, identity_service, notification_service
 from schemas.trainee import (
     ConsentUpdate,
     TraineeContact,
@@ -128,8 +128,19 @@ def register_trainee(payload: TraineeCreate, db: Session = Depends(get_db)):
     # Safe to log: the ID carries no personal information
     logger.info("Registered trainee %s", trainee.trainee_id)
 
+    # Welcome message with the trainee's personal profile link. A delivery
+    # problem must never undo a registration that is already saved.
+    try:
+        notification_service.send_profile_link(db, trainee, welcome=True)
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("Could not record the welcome message for %s", trainee.trainee_id)
+
     return TraineeCreateResponse(
-        trainee_id=trainee.trainee_id, possible_duplicates=possible_duplicates
+        trainee_id=trainee.trainee_id,
+        possible_duplicates=possible_duplicates,
+        profile_link=notification_service.profile_link(trainee),
     )
 
 
@@ -291,3 +302,16 @@ def consent_history(trainee_id: str, db: Session = Depends(get_db)):
         }
         for r in rows
     ]
+
+
+@router.get(
+    "/{trainee_id}/profile-link",
+    summary="The trainee's personal profile link, to give them in person",
+)
+def get_profile_link(trainee_id: str, db: Session = Depends(get_db)):
+    trainee = _get_trainee_or_404(trainee_id, db)
+    return {
+        "trainee_id": trainee.trainee_id,
+        "link": notification_service.profile_link(trainee),
+        "valid_days": notification_service.PROFILE_LINK_DAYS,
+    }
