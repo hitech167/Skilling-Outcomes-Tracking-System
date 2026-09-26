@@ -44,7 +44,10 @@ const CHANNEL_ICONS = {
 
 const PURPOSE_LABELS = {
   FOLLOWUP_REQUEST: { label: 'Follow-up', color: 'blue' },
+  FOLLOWUP_ATTEMPT: { label: 'Follow-up attempt', color: 'geekblue' },
   EMPLOYER_VERIFICATION: { label: 'Employer verification', color: 'purple' },
+  PROFILE_LINK: { label: 'Profile link', color: 'cyan' },
+  PHONE_VERIFICATION: { label: 'Phone verification', color: 'magenta' },
 };
 
 const itemVariants = {

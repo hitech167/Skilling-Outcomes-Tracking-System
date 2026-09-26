@@ -1,5 +1,5 @@
 """
-Tests for listing employer verifications and reminding pending ones.
+Tests for listing employer verifications.
 
 Each test gets its own empty in-memory database (the isolated_db fixture in conftest.py).
 """
@@ -71,34 +71,3 @@ def test_list_filters_by_status_newest_first(isolated_db):
 
 def test_list_is_admin_only(isolated_db):
     assert analyst.get("/api/employer-verifications").status_code == 403
-
-
-def test_remind_pending_resends_links_for_latest_pending_only(isolated_db):
-    trainee_a, emp_a = _employment("A One")
-    _request(emp_a, "hr@a.example")
-    _request(emp_a, "hr@a.example")  # newer attempt supersedes the first
-
-    trainee_b, emp_b = _employment("B Two")
-    _request(emp_b, None)  # no contact -> cannot be reminded
-
-    trainee_c, emp_c = _employment("C Three")
-    _manual(trainee_c, emp_c, "Pending")  # not link-based -> staff follow up by hand
-
-    trainee_d, emp_d = _employment("D Four")
-    _request(emp_d, "9876500000")
-    _manual(trainee_d, emp_d, "Verified")  # already resolved by a later attempt
-
-    before = len(get_ok(admin, "/api/notifications", params={"limit": 500}))
-    summary = admin.post("/api/employer-verifications/remind-pending").json()
-    assert summary == {
-        "pending": 3, "reminded": 1, "sent": 0, "queued": 1, "failed": 0,
-        "skipped_no_contact": 1, "skipped_not_link_based": 1,
-    }
-
-    outbox = get_ok(admin, "/api/notifications", params={"limit": 500})
-    assert len(outbox) == before + 1
-    reminder = outbox[0]
-    assert (reminder["trainee_id"], reminder["channel"], reminder["recipient"]) == (
-        trainee_a, "Email", "hr@a.example",
-    )
-    assert reminder["message"].startswith("Reminder:") and "/employer-verify/" in reminder["message"]

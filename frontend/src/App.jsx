@@ -8,6 +8,7 @@ import Followups from "./pages/Followups";
 import Analytics from "./pages/Analytics";
 import Employers from "./pages/Employers";
 import Messages from "./pages/Messages";
+import ImportPlacements from "./pages/ImportPlacements";
 import StaffLayout from "./layouts/StaffLayout";
 
 function ProtectedRoute({ children }) {
@@ -46,6 +47,7 @@ function App() {
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/employers" element={<Employers />} />
           <Route path="/messages" element={<Messages />} />
+          <Route path="/import-placements" element={<ImportPlacements />} />
         </Route>
 
         <Route path="*" element={<RootRedirect />} />

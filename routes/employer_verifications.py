@@ -3,7 +3,6 @@ Employer verification routes — Phase 4.
 
 POST /api/employer-verifications                    -> create a verification record
 GET  /api/employer-verifications                    -> list verification records (filter by status)
-POST /api/employer-verifications/remind-pending     -> re-send the employer link for pending requests
 GET  /api/employer-verifications/{verification_id}  -> get one verification record
 GET  /api/employment/{employment_id}/verification    -> get the latest verification for an employment
 
@@ -18,19 +17,17 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, text
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from database.connection import get_db
-from database.models import EmployerVerification, EmploymentRecord, Notification, Trainee
+from database.models import EmployerVerification, EmploymentRecord, Trainee
 from routes._shared import get_employment_or_404, get_trainee_or_404
 from schemas.employer_verification import (
     EmployerVerificationCreate,
     EmployerVerificationResponse,
-    RemindPendingSummary,
 )
-from services import notification_service
 
 logger = logging.getLogger(__name__)
 
@@ -139,83 +136,6 @@ def list_employer_verifications(
         query = query.filter(EmployerVerification.verification_status == status_filter.strip())
     rows = query.order_by(EmployerVerification.id.desc()).limit(limit).all()
     return [to_response(record, employment, trainee) for record, employment, trainee in rows]
-
-
-@router.post(
-    "/api/employer-verifications/remind-pending",
-    response_model=RemindPendingSummary,
-    summary="Re-send the confirmation link to employers whose verification is still Pending",
-)
-def remind_pending_verifications(db: Session = Depends(get_db)):
-    """
-    Only the latest verification of each employment is considered (older
-    attempts are history). Link-based requests (method 'Employer Portal')
-    with a contact get a fresh link for the same verification_id; the rest
-    are counted as skipped so staff can follow them up by hand.
-    """
-    latest_ids = (
-        db.query(func.max(EmployerVerification.id))
-        .group_by(EmployerVerification.employment_pk_id)
-    )
-    pending = (
-        db.query(EmployerVerification, EmploymentRecord)
-        .join(EmploymentRecord, EmploymentRecord.id == EmployerVerification.employment_pk_id)
-        .filter(EmployerVerification.verification_status == "Pending")
-        .filter(EmployerVerification.id.in_(latest_ids))
-        .order_by(EmployerVerification.id)
-        .all()
-    )
-
-    summary = {
-        "pending": len(pending),
-        "reminded": 0,
-        "sent": 0,
-        "queued": 0,
-        "failed": 0,
-        "skipped_no_contact": 0,
-        "skipped_not_link_based": 0,
-    }
-    try:
-        for verification, employment in pending:
-            if verification.verification_method != "Employer Portal":
-                summary["skipped_not_link_based"] += 1
-                continue
-            contact = (verification.employer_contact or "").strip()
-            if not contact:
-                summary["skipped_no_contact"] += 1
-                continue
-
-            link = notification_service.employer_verify_link(verification.verification_id)
-            notification = Notification(
-                notification_id=notification_service.generate_notification_id(db),
-                trainee_pk_id=employment.trainee_pk_id,
-                purpose="EMPLOYER_VERIFICATION",
-                channel="Email" if "@" in contact else "SMS",
-                recipient=contact,
-                message=(
-                    f"Reminder: please confirm the employment of a trainee at "
-                    f"{employment.company_name} ({employment.job_role}). "
-                    f"It takes one minute: {link}"
-                ),
-            )
-            notification_service.deliver(
-                notification, subject="Reminder: employment confirmation request"
-            )
-            db.add(notification)
-            summary["reminded"] += 1
-            summary[notification.status.lower()] += 1
-        db.commit()
-
-    except SQLAlchemyError:
-        db.rollback()
-        logger.exception("Database error while reminding pending employer verifications")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Could not send reminders right now. Please try again.",
-        )
-
-    logger.info("Employer verification reminders: %s", summary)
-    return RemindPendingSummary(**summary)
 
 
 @router.get(

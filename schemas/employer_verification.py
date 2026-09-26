@@ -116,15 +116,3 @@ class EmployerVerificationResponse(BaseModel):
     created_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
-
-
-class RemindPendingSummary(BaseModel):
-    """Result of POST /api/employer-verifications/remind-pending"""
-
-    pending: int
-    reminded: int
-    sent: int
-    queued: int
-    failed: int
-    skipped_no_contact: int
-    skipped_not_link_based: int

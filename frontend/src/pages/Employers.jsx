@@ -164,14 +164,16 @@ export default function Employers() {
   const handleRemind = async () => {
     setReminding(true);
     try {
-      const summary = await api.post('/api/employer-verifications/remind-pending', {});
+      const summary = await api.post('/api/verifications/remind-pending', {});
       setRemindSummary(summary);
       setRemindModalVisible(false);
       if (summary.reminded > 0) {
         message.success(`Reminders created for ${summary.reminded} employer(s).`);
       } else {
-        message.info('No pending verifications could be reminded automatically.');
+        message.info('No employers were due a reminder.');
       }
+      // Unresponsive employers are moved to "Unable to Verify"
+      if (summary.marked_unresponsive > 0) reload();
     } catch (err) {
       message.error(err?.detail || 'Failed to send reminders.');
     } finally {
@@ -313,19 +315,20 @@ export default function Employers() {
         {remindSummary && (
           <motion.div variants={itemVariants} style={{ marginBottom: 24 }}>
             <Alert
-              type={remindSummary.failed > 0 ? 'warning' : 'info'}
+              type="info"
               showIcon
               closable
               onClose={() => setRemindSummary(null)}
-              message={`Reminders: ${remindSummary.reminded} of ${remindSummary.pending} pending verification(s)`}
+              message={`${remindSummary.reminded} reminder(s) created`}
               description={
                 <>
-                  {remindSummary.sent} sent, {remindSummary.queued} queued in the outbox,{' '}
-                  {remindSummary.failed} failed.
+                  Check the Messages page for delivery status.
+                  {remindSummary.marked_unresponsive > 0 &&
+                    ` ${remindSummary.marked_unresponsive} marked Unable to Verify (employer unresponsive).`}
                   {remindSummary.skipped_no_contact > 0 &&
                     ` ${remindSummary.skipped_no_contact} skipped (no employer contact).`}
-                  {remindSummary.skipped_not_link_based > 0 &&
-                    ` ${remindSummary.skipped_not_link_based} skipped (verified by other methods; follow up manually).`}
+                  {remindSummary.skipped_no_consent > 0 &&
+                    ` ${remindSummary.skipped_no_consent} skipped (trainee withdrew consent).`}
                 </>
               }
             />
@@ -373,12 +376,13 @@ export default function Employers() {
         okText="Send reminders"
       >
         <p>
-          This re-sends the confirmation link to every employer whose latest verification is
-          still <StatusTag status="Pending" /> ({pendingCount} record(s) in total).
+          This re-sends the confirmation link to employers whose verification is still{' '}
+          <StatusTag status="Pending" /> ({pendingCount} record(s) in total) and who were last
+          contacted more than 7 days ago.
         </p>
         <p style={{ marginBottom: 0 }}>
-          Only link-based requests with an employer contact can be reminded automatically.
-          Messages go to the notification outbox if no email/SMS provider is configured.
+          Employers that have already had 3 requests with no answer are marked Unable to Verify
+          instead. Trainees who withdrew consent are skipped.
         </p>
       </Modal>
 

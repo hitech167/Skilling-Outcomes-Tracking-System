@@ -6,6 +6,7 @@ import {
   PhoneOutlined,
   BankOutlined,
   BarChartOutlined,
+  UploadOutlined,
 } from '@ant-design/icons';
 import { motion } from 'framer-motion';
 import { getMe, logout } from '../api/client';
@@ -47,6 +48,15 @@ const CARDS_CONFIG = [
     icon: <BarChartOutlined style={{ fontSize: 30, color: '#722ed1' }} />,
     roles: ['admin', 'analyst'],
     path: '/analytics',
+    available: true,
+  },
+  {
+    key: 'import-placements',
+    title: 'Import Placements',
+    description: 'Upload placement data from EPFO, job portals, or employer sheets as CSV.',
+    icon: <UploadOutlined style={{ fontSize: 30, color: '#13c2c2' }} />,
+    roles: ['admin'],
+    path: '/import-placements',
     available: true,
   },
 ];
