@@ -19,6 +19,7 @@ import {
   MenuFoldOutlined,
 } from '@ant-design/icons';
 import { getMe, logout } from '../api/client';
+import { ADMIN_ONLY, ANALYTICS_ROLES, hasRole } from '../constants/roles';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
@@ -26,56 +27,67 @@ const { Text } = Typography;
 const MENU_ITEMS = [
   {
     key: '/dashboard',
+    roles: ANALYTICS_ROLES,
     icon: <DashboardOutlined />,
     label: <Link to="/dashboard">Home</Link>,
   },
   {
     key: '/trainees',
+    roles: ADMIN_ONLY,
     icon: <TeamOutlined />,
     label: <Link to="/trainees">Trainees</Link>,
   },
   {
     key: '/trainees/register',
+    roles: ADMIN_ONLY,
     icon: <UserAddOutlined />,
     label: <Link to="/trainees/register">Register trainee</Link>,
   },
   {
     key: '/followups',
+    roles: ADMIN_ONLY,
     icon: <PhoneOutlined />,
     label: <Link to="/followups">Follow-ups</Link>,
   },
   {
     key: '/messages',
+    roles: ADMIN_ONLY,
     icon: <MessageOutlined />,
     label: <Link to="/messages">Messages</Link>,
   },
   {
     key: '/employers',
+    roles: ADMIN_ONLY,
     icon: <BankOutlined />,
     label: <Link to="/employers">Employers</Link>,
   },
   {
     key: '/wage-history',
+    roles: ADMIN_ONLY,
     icon: <LineChartOutlined />,
     label: <Link to="/wage-history">Wage history</Link>,
   },
   {
     key: '/import-placements',
+    roles: ADMIN_ONLY,
     icon: <UploadOutlined />,
     label: <Link to="/import-placements">Import placements</Link>,
   },
   {
     key: '/identity',
+    roles: ADMIN_ONLY,
     icon: <IdcardOutlined />,
     label: <Link to="/identity">Identity</Link>,
   },
   {
     key: '/analytics',
+    roles: ANALYTICS_ROLES,
     icon: <BarChartOutlined />,
     label: <Link to="/analytics">Analytics</Link>,
   },
   {
     key: '/insights',
+    roles: ANALYTICS_ROLES,
     icon: <BulbOutlined />,
     label: <Link to="/insights">Insights</Link>,
   },
@@ -120,6 +132,12 @@ export default function StaffLayout() {
     logout();
     navigate('/login', { replace: true });
   };
+
+  // Only show pages the user's role can open (roles is ours, not a Menu prop)
+  const menuItems = MENU_ITEMS.filter((item) => hasRole(user, item.roles)).map(
+    // eslint-disable-next-line no-unused-vars
+    ({ roles, ...item }) => item
+  );
 
   // Find active key from current path
   const selectedKey =
@@ -212,7 +230,7 @@ export default function StaffLayout() {
           theme="dark"
           mode="inline"
           selectedKeys={[selectedKey]}
-          items={MENU_ITEMS}
+          items={menuItems}
           style={{ marginTop: 8 }}
         />
       </Sider>
