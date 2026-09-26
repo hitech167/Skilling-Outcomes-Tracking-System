@@ -6,6 +6,7 @@ import TraineeDetail from "./pages/TraineeDetail";
 import RegisterTrainee from "./pages/RegisterTrainee";
 import Followups from "./pages/Followups";
 import Analytics from "./pages/Analytics";
+import Employers from "./pages/Employers";
 import StaffLayout from "./layouts/StaffLayout";
 
 function ProtectedRoute({ children }) {
@@ -42,6 +43,7 @@ function App() {
           <Route path="/trainees/:id" element={<TraineeDetail />} />
           <Route path="/followups" element={<Followups />} />
           <Route path="/analytics" element={<Analytics />} />
+          <Route path="/employers" element={<Employers />} />
         </Route>
 
         <Route path="*" element={<RootRedirect />} />

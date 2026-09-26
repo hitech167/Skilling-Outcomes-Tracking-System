@@ -46,7 +46,6 @@ from services import notification_service, self_service
 from services.auth import (
     PURPOSE_EMPLOYER_VERIFY,
     PURPOSE_SELF_REPORT,
-    create_link_token,
     read_link_token,
 )
 
@@ -54,8 +53,6 @@ logger = logging.getLogger(__name__)
 
 public_router = APIRouter(tags=["Self-service links (public)"])
 admin_router = APIRouter(tags=["Automated follow-up & verification links"])
-
-VERIFICATION_LINK_DAYS = 30
 
 
 # =====================================================================
@@ -149,8 +146,7 @@ def create_verification_request(
 ):
     employment = get_employment_or_404(employment_id, db)
     verification = self_service.create_verification_request(db, employment, payload.employer_contact)
-    token = create_link_token(PURPOSE_EMPLOYER_VERIFY, verification.verification_id, VERIFICATION_LINK_DAYS)
-    link = f"{notification_service.public_base_url()}/employer-verify/{token}"
+    link = notification_service.employer_verify_link(verification.verification_id)
 
     notification = None
     contact = (payload.employer_contact or "").strip()
@@ -175,7 +171,7 @@ def create_verification_request(
         verification_id=verification.verification_id,
         employment_id=employment.employment_id,
         link=link,
-        valid_days=VERIFICATION_LINK_DAYS,
+        valid_days=notification_service.VERIFICATION_LINK_DAYS,
         notification_id=notification.notification_id if notification else None,
         delivery_status=notification.status if notification else None,
     )

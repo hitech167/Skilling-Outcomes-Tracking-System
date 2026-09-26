@@ -7,7 +7,7 @@ is kept, never overwritten) — see database/models.py:EmployerVerification
 for the design note on why.
 """
 
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -109,4 +109,22 @@ class EmployerVerificationResponse(BaseModel):
     verified_by: Optional[str] = None
     verification_notes: Optional[str] = None
 
+    # Joined from the trainee / employment record for display
+    trainee_name: Optional[str] = None
+    job_role: Optional[str] = None
+    salary: Optional[float] = None
+    created_at: Optional[datetime] = None
+
     model_config = {"from_attributes": True}
+
+
+class RemindPendingSummary(BaseModel):
+    """Result of POST /api/employer-verifications/remind-pending"""
+
+    pending: int
+    reminded: int
+    sent: int
+    queued: int
+    failed: int
+    skipped_no_contact: int
+    skipped_not_link_based: int

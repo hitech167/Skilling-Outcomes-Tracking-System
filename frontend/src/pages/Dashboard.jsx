@@ -38,7 +38,7 @@ const CARDS_CONFIG = [
     icon: <BankOutlined style={{ fontSize: 30, color: '#fa8c16' }} />,
     roles: ['admin'],
     path: '/employers',
-    available: false,
+    available: true,
   },
   {
     key: 'analytics',

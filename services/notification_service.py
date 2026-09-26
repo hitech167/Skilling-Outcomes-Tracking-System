@@ -34,12 +34,13 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from database.models import FollowUp, Notification, Trainee, TrainingRecord
-from services.auth import PURPOSE_SELF_REPORT, create_link_token
+from services.auth import PURPOSE_EMPLOYER_VERIFY, PURPOSE_SELF_REPORT, create_link_token
 
 logger = logging.getLogger(__name__)
 
 RESEND_AFTER_DAYS = 7
 LINK_VALID_DAYS = 30
+VERIFICATION_LINK_DAYS = 30
 FOLLOWUP_LABELS = {
     "30_DAY": "30-day",
     "90_DAY": "90-day",
@@ -60,6 +61,11 @@ def generate_notification_id(db: Session) -> str:
 def self_report_link(followup: FollowUp) -> str:
     token = create_link_token(PURPOSE_SELF_REPORT, followup.followup_id, LINK_VALID_DAYS)
     return f"{public_base_url()}/self-report/{token}"
+
+
+def employer_verify_link(verification_id: str) -> str:
+    token = create_link_token(PURPOSE_EMPLOYER_VERIFY, verification_id, VERIFICATION_LINK_DAYS)
+    return f"{public_base_url()}/employer-verify/{token}"
 
 
 # ---------------------------------------------------------------------
