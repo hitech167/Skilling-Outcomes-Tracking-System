@@ -76,6 +76,7 @@ def test_dispatch_messages_due_followups_by_preferred_channel(isolated_db):
     assert (phone_trainee, "Phone") in channels
     email_msg = next(n for n in outbox if n["channel"] == "Email")
     assert email_msg["recipient"] == "ravi@example.com"
+    assert email_msg["trainee_name"] == "Ravi Joshi"
     assert "Ravi" in email_msg["message"] and "/self-report/" in email_msg["message"]
     assert "SMTP_HOST" in email_msg["error"]
 

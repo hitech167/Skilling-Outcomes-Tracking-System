@@ -206,6 +206,7 @@ class DispatchSummary(BaseModel):
 class NotificationItem(BaseModel):
     notification_id: str
     trainee_id: str
+    trainee_name: Optional[str] = None
     followup_id: Optional[str] = None
     purpose: str
     channel: str

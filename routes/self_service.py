@@ -178,13 +178,16 @@ def create_verification_request(
 
 
 def _notification_item(n: Notification, db: Session) -> NotificationItem:
-    trainee = db.query(Trainee.trainee_id).filter(Trainee.id == n.trainee_pk_id).scalar()
+    trainee_id, trainee_name = (
+        db.query(Trainee.trainee_id, Trainee.full_name).filter(Trainee.id == n.trainee_pk_id).one()
+    )
     followup_id = None
     if n.followup_pk_id is not None:
         followup_id = db.query(FollowUp.followup_id).filter(FollowUp.id == n.followup_pk_id).scalar()
     return NotificationItem(
         notification_id=n.notification_id,
-        trainee_id=trainee,
+        trainee_id=trainee_id,
+        trainee_name=trainee_name,
         followup_id=followup_id,
         purpose=n.purpose,
         channel=n.channel,

@@ -7,6 +7,7 @@ import RegisterTrainee from "./pages/RegisterTrainee";
 import Followups from "./pages/Followups";
 import Analytics from "./pages/Analytics";
 import Employers from "./pages/Employers";
+import Messages from "./pages/Messages";
 import StaffLayout from "./layouts/StaffLayout";
 
 function ProtectedRoute({ children }) {
@@ -44,6 +45,7 @@ function App() {
           <Route path="/followups" element={<Followups />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/employers" element={<Employers />} />
+          <Route path="/messages" element={<Messages />} />
         </Route>
 
         <Route path="*" element={<RootRedirect />} />
