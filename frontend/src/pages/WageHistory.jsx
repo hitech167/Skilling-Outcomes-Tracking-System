@@ -118,8 +118,9 @@ function EmploymentProgression({ employment }) {
     async function fetchProgression() {
       try {
         const [summaryRes, historyRes] = await Promise.all([
-          api.get(`/api/employment/${id}/summary`),
-          api.get(`/api/employment/${id}/wage-history`),
+          // Shared: StrictMode (development) runs mount effects twice
+          api.getShared(`/api/employment/${id}/summary`),
+          api.getShared(`/api/employment/${id}/wage-history`),
         ]);
         if (isMounted) {
           setSummary(summaryRes);
@@ -255,7 +256,7 @@ function TraineeWageProgression({ traineeId }) {
 
     async function fetchEmployments() {
       try {
-        const res = await api.get(
+        const res = await api.getShared(
           `/api/trainees/${encodeURIComponent(traineeId)}/employment-history`
         );
         if (isMounted) setEmployments(res?.employment_history || []);
@@ -323,7 +324,7 @@ export default function WageHistory() {
       if (sourceFilter) params.set('source', sourceFilter);
       if (statusFilter) params.set('verification_status', statusFilter);
       try {
-        const data = await api.get(`/api/wage-history?${params}`);
+        const data = await api.getShared(`/api/wage-history?${params}`);
         if (isMounted) {
           setRecords(Array.isArray(data) ? data : []);
           setLoadError(null);

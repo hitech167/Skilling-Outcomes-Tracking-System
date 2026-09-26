@@ -105,7 +105,8 @@ export default function Employers() {
 
     async function fetchVerifications() {
       try {
-        const data = await api.get('/api/employer-verifications?limit=1000');
+        // Shared: StrictMode (development) runs this mount effect twice
+        const data = await api.getShared('/api/employer-verifications?limit=1000');
         if (isMounted) {
           setVerifications(data);
           setLoadError(null);
@@ -137,7 +138,7 @@ export default function Employers() {
       setDetailLoading(true);
       setDetailError(null);
       try {
-        const data = await api.get(
+        const data = await api.getShared(
           `/api/employer-verifications/${encodeURIComponent(selectedId)}`
         );
         if (isMounted) setDetail(data);

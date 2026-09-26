@@ -25,20 +25,21 @@ import { api } from '../api/client';
 
 const { Title, Text } = Typography;
 
-// Several /api/insights endpoints are subsets of these (skill-gaps,
-// additional-training, additional-training/by-course, programme-improvement),
-// so only the ones that carry distinct data are fetched.
-const ENDPOINTS = {
-  summary: '/api/insights/summary',
-  remedial: '/api/insights/remedial-actions',
-  accountability: '/api/insights/accountability',
-  courseGaps: '/api/insights/skill-gaps/by-course',
-  districts: '/api/insights/resource-allocation',
-  nonPlacement: '/api/insights/non-placement',
-  attrition: '/api/insights/attrition',
-  relevance: '/api/insights/training-relevance',
-  longitudinal: '/api/insights/longitudinal-outcomes',
-  dataQuality: '/api/insights/data-quality',
+// Everything on this page comes from one request: GET /api/insights/all
+// returns each section under the key on the right (the same body as the
+// per-section endpoint, e.g. /api/insights/remedial-actions).
+const ALL_INSIGHTS_PATH = '/api/insights/all';
+const SECTIONS = {
+  summary: 'summary',
+  remedial: 'remedial_actions',
+  accountability: 'accountability',
+  courseGaps: 'skill_gaps_by_course',
+  districts: 'resource_allocation',
+  nonPlacement: 'non_placement',
+  attrition: 'attrition',
+  relevance: 'training_relevance',
+  longitudinal: 'longitudinal_outcomes',
+  dataQuality: 'data_quality',
 };
 
 const METRIC_LABELS = {
@@ -338,22 +339,6 @@ function ReasonList({ reasons, emptyText }) {
   );
 }
 
-// React StrictMode (development) mounts the page twice, which would fire every
-// request twice. Both mounts share this one in-flight load instead; it is
-// cleared once settled, so a later visit to the page still fetches fresh data.
-let pendingLoad = null;
-
-function loadInsights() {
-  if (!pendingLoad) {
-    pendingLoad = Promise.allSettled(
-      Object.keys(ENDPOINTS).map((key) => api.get(ENDPOINTS[key]))
-    ).finally(() => {
-      pendingLoad = null;
-    });
-  }
-  return pendingLoad;
-}
-
 export default function Insights() {
   const [data, setData] = useState({});
   const [errors, setErrors] = useState({});
@@ -364,21 +349,22 @@ export default function Insights() {
     let isMounted = true;
 
     async function fetchAll() {
-      const keys = Object.keys(ENDPOINTS);
-      const results = await loadInsights();
-      if (!isMounted) return;
-
       const nextData = {};
       const nextErrors = {};
-      results.forEach((result, i) => {
-        const key = keys[i];
-        if (result.status === 'fulfilled') {
-          nextData[key] = result.value;
-        } else {
-          const detail = result.reason?.detail;
-          nextErrors[key] = typeof detail === 'string' ? detail : 'Could not load this section.';
-        }
-      });
+      try {
+        // Shared: StrictMode (development) runs this mount effect twice
+        const all = await api.getShared(ALL_INSIGHTS_PATH);
+        Object.entries(SECTIONS).forEach(([key, field]) => {
+          nextData[key] = all[field];
+        });
+      } catch (err) {
+        // One request, so a failure affects every section alike
+        const detail = typeof err?.detail === 'string' ? err.detail : 'Could not load this section.';
+        Object.keys(SECTIONS).forEach((key) => {
+          nextErrors[key] = detail;
+        });
+      }
+      if (!isMounted) return;
       setData(nextData);
       setErrors(nextErrors);
       setLoading(false);

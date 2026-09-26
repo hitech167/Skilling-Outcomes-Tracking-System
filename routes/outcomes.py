@@ -14,7 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from database.connection import get_db
-from database.models import Outcome
+from database.models import Outcome, TrainingRecord
 from routes._shared import get_outcome_or_404, get_trainee_or_404, get_training_record_or_404
 from schemas.outcome import (
     OutcomeCreate,
@@ -109,8 +109,10 @@ def get_outcome(outcome_id: str, db: Session = Depends(get_db)):
 def list_trainee_outcomes(trainee_id: str, db: Session = Depends(get_db)):
     trainee = get_trainee_or_404(trainee_id, db)
 
+    # The training's public ID comes from the same query (not a lazy load per outcome)
     outcomes = (
-        db.query(Outcome)
+        db.query(Outcome.outcome_id, Outcome.outcome_type, Outcome.status_date, TrainingRecord.record_id)
+        .join(TrainingRecord, TrainingRecord.id == Outcome.training_record_pk_id)
         .filter(Outcome.trainee_pk_id == trainee.id)
         .order_by(Outcome.status_date)
         .all()
@@ -121,7 +123,7 @@ def list_trainee_outcomes(trainee_id: str, db: Session = Depends(get_db)):
         outcomes=[
             OutcomeSummary(
                 outcome_id=o.outcome_id,
-                training_id=o.training_record.record_id,
+                training_id=o.record_id,
                 outcome_type=o.outcome_type,
                 status_date=o.status_date,
             )

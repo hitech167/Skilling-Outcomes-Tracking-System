@@ -297,6 +297,24 @@ def _wages_by_employment(db: Session) -> dict:
     return _cached(db, "wages_by_employment", load)
 
 
+def _trainee_districts(db: Session) -> list:
+    """Every trainee's id and district."""
+    return _cached(db, "trainee_districts", lambda: db.query(Trainee.id, Trainee.district).all())
+
+
+def _non_placement_by_trainee(db: Session) -> dict:
+    """trainee_pk_id -> number of non-placement records (counted in the database)."""
+    return _cached(
+        db,
+        "non_placement_by_trainee",
+        lambda: dict(
+            db.query(NonPlacementRecord.trainee_pk_id, func.count(NonPlacementRecord.id))
+            .group_by(NonPlacementRecord.trainee_pk_id)
+            .all()
+        ),
+    )
+
+
 def _resolve_latest_status(
     employment: EmploymentRecord, latest_rows: dict
 ) -> str:
@@ -893,14 +911,10 @@ def get_remedial_insights(db: Session) -> list:
 
 
 def get_resource_allocation(db: Session) -> list:
-    trainees = db.query(Trainee.id, Trainee.district).all()
+    trainees = _trainee_districts(db)
     outcome_types_by_trainee = _trainee_outcome_types(db)
 
-    non_placement_by_trainee = dict(
-        db.query(NonPlacementRecord.trainee_pk_id, func.count(NonPlacementRecord.id))
-        .group_by(NonPlacementRecord.trainee_pk_id)
-        .all()
-    )
+    non_placement_by_trainee = _non_placement_by_trainee(db)
 
     followup_updates = _followup_update_rows(db)
     skill_gap_by_trainee = Counter(

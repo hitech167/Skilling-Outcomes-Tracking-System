@@ -69,22 +69,24 @@ def _round(value):
     return None if value is None else round(value, 2)
 
 
-def _current_status(db: Session, employment: EmploymentRecord) -> str:
+def _current_statuses(db: Session, employments: list) -> dict:
     """
-    The employment's "current" status: the most recent status-history row
-    if one exists, otherwise the status already stored on the Phase 3
+    employment pk -> its "current" status: the most recent status-history
+    row if one exists, otherwise the status already stored on the Phase 3
     employment_records row (so employments predating Phase 4 still work).
+    One query for all the given employments, not one per employment.
     """
-    latest = (
-        db.query(EmploymentStatusHistory)
-        .filter(EmploymentStatusHistory.employment_pk_id == employment.id)
-        .order_by(
-            EmploymentStatusHistory.status_date.desc(),
-            EmploymentStatusHistory.id.desc(),
+    ids = [e.id for e in employments]
+    current = {e.id: e.employment_status for e in employments}
+    if ids:
+        rows = (
+            db.query(EmploymentStatusHistory.employment_pk_id, EmploymentStatusHistory.employment_status)
+            .filter(EmploymentStatusHistory.employment_pk_id.in_(ids))
+            .order_by(EmploymentStatusHistory.status_date.asc(), EmploymentStatusHistory.id.asc())
         )
-        .first()
-    )
-    return latest.employment_status if latest else employment.employment_status
+        for employment_pk_id, status_value in rows:
+            current[employment_pk_id] = status_value  # ascending, so the last one wins
+    return current
 
 
 @router.post(
@@ -208,11 +210,15 @@ def get_employment_summary(employment_id: str, db: Session = Depends(get_db)):
         fallback = float(employment.salary) if employment.salary is not None else None
         salary_summary = SalarySummary(initial=fallback, latest=fallback)
 
-    status_count = (
-        db.query(EmploymentStatusHistory)
+    # Count and latest status from one query instead of two
+    statuses = (
+        db.query(EmploymentStatusHistory.employment_status)
         .filter(EmploymentStatusHistory.employment_pk_id == employment.id)
-        .count()
+        .order_by(EmploymentStatusHistory.status_date.asc(), EmploymentStatusHistory.id.asc())
+        .all()
     )
+    status_count = len(statuses)
+    current_status = statuses[-1].employment_status if statuses else employment.employment_status
 
     return EmploymentSummaryResponse(
         employment_id=employment.employment_id,
@@ -221,7 +227,7 @@ def get_employment_summary(employment_id: str, db: Session = Depends(get_db)):
         joining_date=employment.joining_date,
         verification=verification_summary,
         salary=salary_summary,
-        current_status=_current_status(db, employment),
+        current_status=current_status,
         wage_history_count=len(wage_records),
         status_history_count=status_count,
     )
@@ -242,6 +248,8 @@ def get_trainee_employment_history(trainee_id: str, db: Session = Depends(get_db
         .all()
     )
 
+    current = _current_statuses(db, employments)
+
     return TraineeEmploymentHistoryResponse(
         trainee_id=trainee.trainee_id,
         employment_history=[
@@ -250,7 +258,7 @@ def get_trainee_employment_history(trainee_id: str, db: Session = Depends(get_db
                 company_name=emp.company_name,
                 job_role=emp.job_role,
                 joining_date=emp.joining_date,
-                current_status=_current_status(db, emp),
+                current_status=current[emp.id],
             )
             for emp in employments
         ],

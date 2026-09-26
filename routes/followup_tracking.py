@@ -595,8 +595,17 @@ def followup_summary(followup_id: str, db: Session = Depends(get_db)):
 def trainee_followup_timeline(trainee_id: str, db: Session = Depends(get_db)):
     trainee = get_trainee_or_404(trainee_id, db)
 
+    # The training's public ID comes from the same query (not one lookup per follow-up)
     followups = (
-        db.query(FollowUp)
+        db.query(
+            FollowUp.followup_id,
+            FollowUp.followup_type,
+            FollowUp.scheduled_date,
+            FollowUp.completed_date,
+            FollowUp.status,
+            TrainingRecord.record_id,
+        )
+        .join(TrainingRecord, TrainingRecord.id == FollowUp.training_record_pk_id)
         .filter(FollowUp.trainee_pk_id == trainee.id)
         .order_by(FollowUp.scheduled_date.asc())
         .all()
@@ -607,7 +616,7 @@ def trainee_followup_timeline(trainee_id: str, db: Session = Depends(get_db)):
         followups=[
             TraineeFollowupTimelineItem(
                 followup_id=f.followup_id,
-                training_id=_training_public_id(db, f.training_record_pk_id),
+                training_id=f.record_id,
                 followup_type=f.followup_type,
                 scheduled_date=f.scheduled_date,
                 completed_date=f.completed_date,

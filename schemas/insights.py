@@ -180,3 +180,18 @@ class SummaryMetrics(BaseModel):
 class InsightSummaryResponse(BaseModel):
     metrics: SummaryMetrics
     insights: list[ProgrammeObservationItem]
+
+
+class InsightsAllResponse(BaseModel):
+    """Body of GET /api/insights/all: every section the Insights page shows, in one response."""
+
+    summary: InsightSummaryResponse
+    remedial_actions: list[RemedialActionItem]
+    accountability: AccountabilityResponse
+    skill_gaps_by_course: list[CourseFollowupStatsItem]
+    resource_allocation: list[ResourceAllocationItem]
+    non_placement: NonPlacementAnalysisResponse
+    attrition: AttritionAnalysisResponse
+    training_relevance: TrainingRelevanceInsightsResponse
+    longitudinal_outcomes: LongitudinalOutcomesResponse
+    data_quality: DataQualityResponse

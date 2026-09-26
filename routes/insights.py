@@ -26,6 +26,7 @@ Everything is read-only — no writes, no new tables/sequences.
     GET /api/insights/accountability
     GET /api/insights/data-quality
     GET /api/insights/summary
+    GET /api/insights/all        -> every section the Insights page shows, one response
 """
 
 import logging
@@ -41,6 +42,7 @@ from schemas.insights import (
     AttritionAnalysisResponse,
     CourseFollowupStatsItem,
     DataQualityResponse,
+    InsightsAllResponse,
     InsightSummaryResponse,
     LongitudinalOutcomesResponse,
     NonPlacementAnalysisResponse,
@@ -193,3 +195,12 @@ def data_quality(db: Session = Depends(get_analytics_db)):
 )
 def summary(db: Session = Depends(get_analytics_db)):
     return _safe(db, insights_service.get_insight_summary)
+
+
+@router.get(
+    "/all",
+    response_model=InsightsAllResponse,
+    summary="Every Insights-page section in one response (one request instead of ten)",
+)
+def all_insights(db: Session = Depends(get_analytics_db)):
+    return _safe(db, insights_service.get_all_insights)

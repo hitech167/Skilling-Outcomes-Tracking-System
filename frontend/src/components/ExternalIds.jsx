@@ -39,7 +39,8 @@ export default function ExternalIds({ traineeId }) {
 
     async function fetchIds() {
       try {
-        const data = await api.get(`/api/trainees/${encodeURIComponent(traineeId)}/external-ids`);
+        // Shared: StrictMode (development) runs this mount effect twice
+        const data = await api.getShared(`/api/trainees/${encodeURIComponent(traineeId)}/external-ids`);
         if (isMounted) {
           setIds(Array.isArray(data) ? data : []);
           setLoadError(null);

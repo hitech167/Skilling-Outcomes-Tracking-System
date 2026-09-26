@@ -18,10 +18,13 @@ only adds what Phase 6 did not already compute:
 Nothing here writes to the database. No new tables/models/sequences.
 """
 
+import threading
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from sqlalchemy.pool import SingletonThreadPool, StaticPool
 
 from database.models import (
     EmployerVerification,
@@ -35,6 +38,7 @@ from database.models import (
 from services import analytics_service, identity_service
 from services.analytics_service import (
     ATTRITION_STATUSES,
+    _CACHE_KEY,
     _all_training_rows,
     _avg,
     _cached,
@@ -42,8 +46,10 @@ from services.analytics_service import (
     _followup_update_rows,
     _latest_employment_status_rows,
     _latest_outcome_by_training,
+    _non_placement_by_trainee,
     _pct,
     _resolve_latest_status,
+    _trainee_districts,
     _wages_by_employment,
     wage_progression_for,
 )
@@ -220,17 +226,31 @@ def get_additional_training_by_course(db: Session) -> list:
 # ---------------------------------------------------------------------
 
 
+def _completed_training_count(db: Session) -> int:
+    return _cached(
+        db,
+        "completed_training_count",
+        lambda: db.query(TrainingRecord).filter(TrainingRecord.status == "Completed").count(),
+    )
+
+
+def _completed_followups_by_type(db: Session) -> dict:
+    """followup_type -> completed follow-ups (one grouped query, not one count per type)."""
+    return _cached(
+        db,
+        "completed_followups_by_type",
+        lambda: dict(
+            db.query(FollowUp.followup_type, func.count(FollowUp.id))
+            .filter(FollowUp.status == "Completed")
+            .group_by(FollowUp.followup_type)
+            .all()
+        ),
+    )
+
+
 def get_longitudinal_outcomes(db: Session) -> dict:
-    training_completed = (
-        db.query(TrainingRecord).filter(TrainingRecord.status == "Completed").count()
-    )
-    # One grouped query instead of one count per follow-up type
-    completed_by_type = dict(
-        db.query(FollowUp.followup_type, func.count(FollowUp.id))
-        .filter(FollowUp.status == "Completed")
-        .group_by(FollowUp.followup_type)
-        .all()
-    )
+    training_completed = _completed_training_count(db)
+    completed_by_type = _completed_followups_by_type(db)
     followup_counts = {ftype: completed_by_type.get(ftype, 0) for ftype in FOLLOWUP_TYPES}
     retention = analytics_service.get_retention_rate(db)
     employed_trainees = retention["employed_trainees"]
@@ -511,16 +531,63 @@ def _blank(value) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
+def _trainee_quality_rows(db: Session) -> list:
+    """The trainee columns the data-quality checks and duplicate grouping read."""
+    return _cached(
+        db,
+        "trainee_quality_rows",
+        lambda: db.query(
+            Trainee.id,
+            Trainee.trainee_id,
+            Trainee.full_name,
+            Trainee.phone,
+            Trainee.current_location,
+            Trainee.gender,
+            Trainee.dob,
+        ).all(),
+    )
+
+
+def _verified_employment_pks(db: Session) -> set:
+    """Employments with at least one employer verification record."""
+    return _cached(
+        db,
+        "verified_employment_pks",
+        lambda: {pk for (pk,) in db.query(EmployerVerification.employment_pk_id).distinct()},
+    )
+
+
+def _consent_withdrawn_count(db: Session) -> int:
+    # Counted outside the consent scope on purpose: it reports how many
+    # trainees the other figures EXCLUDE (a count only, no identities).
+    return _cached(
+        db,
+        "consent_withdrawn_count",
+        lambda: db.query(Trainee)
+        .execution_options(skip_consent_scope=True)
+        .filter(Trainee.consent_given.is_(False))
+        .count(),
+    )
+
+
+def _followups_by_status(db: Session) -> dict:
+    """status -> number of follow-ups (counted in the database)."""
+    return _cached(
+        db,
+        "followups_by_status",
+        lambda: dict(
+            db.query(FollowUp.status, func.count(FollowUp.id)).group_by(FollowUp.status).all()
+        ),
+    )
+
+
 def get_data_quality(db: Session) -> dict:
-    trainees = db.query(
-        Trainee.id,
-        Trainee.trainee_id,
-        Trainee.full_name,
-        Trainee.phone,
-        Trainee.current_location,
-        Trainee.gender,
-        Trainee.dob,
-    ).all()
+    # The summary includes data quality too; compute it once per request
+    return _cached(db, "data_quality", lambda: _compute_data_quality(db))
+
+
+def _compute_data_quality(db: Session) -> dict:
+    trainees = _trainee_quality_rows(db)
     trainings = [tr for tr, _outcome, _trainee in _all_training_rows(db)]
     employments = _employment_rows(db)
 
@@ -540,29 +607,18 @@ def get_data_quality(db: Session) -> dict:
     # Longitudinal gaps: records that exist but whose follow-on evidence doesn't yet.
     # Wage / status / outcome sets come from loaders the other figures already use.
     with_wage = set(_wages_by_employment(db))
-    with_verification = {
-        pk for (pk,) in db.query(EmployerVerification.employment_pk_id).distinct()
-    }
+    with_verification = _verified_employment_pks(db)
     with_status = set(_latest_employment_status_rows(db))
     with_outcome = set(_latest_outcome_by_training(db))
 
-    # Counted outside the consent scope on purpose: it reports how many
-    # trainees the other figures EXCLUDE (a count only, no identities).
-    consent_withdrawn = (
-        db.query(Trainee)
-        .execution_options(skip_consent_scope=True)
-        .filter(Trainee.consent_given.is_(False))
-        .count()
-    )
+    consent_withdrawn = _consent_withdrawn_count(db)
     # Reuses the trainee rows loaded above instead of reading the table again
     duplicate_trainees = sum(
         len(g["trainee_ids"]) for g in identity_service.group_duplicates(trainees)
     )
 
     # Follow-ups are only counted, so count them in the database
-    followups_by_status = dict(
-        db.query(FollowUp.status, func.count(FollowUp.id)).group_by(FollowUp.status).all()
-    )
+    followups_by_status = _followups_by_status(db)
     total_followups = sum(followups_by_status.values())
     completed_followups = followups_by_status.get("Completed", 0)
     followups_not_completed = total_followups - completed_followups
@@ -628,4 +684,100 @@ def get_insight_summary(db: Session) -> dict:
             "followup_completion_rate": data_quality["followup_completion_rate"],
         },
         "insights": generate_programme_observations(db),
+    }
+
+
+# ---------------------------------------------------------------------
+# Combined — everything the Insights page shows, in one request
+# ---------------------------------------------------------------------
+
+
+PREFETCH_WORKERS = 6
+
+
+def _prefetch(db: Session, loaders) -> None:
+    """
+    Run independent base loaders at the same time, each on its own session
+    (same bind, same consent scope), and put their results in `db`'s
+    per-request cache. Against a remote database each loader is mostly
+    waiting on a network round trip, so overlapping them is what makes one
+    combined request faster than the browser's parallel requests; run one
+    after another, the combined request was slower.
+
+    A pool that gives every thread the same connection (the tests'
+    in-memory SQLite) cannot run queries concurrently, so there the
+    loaders simply run in turn on `db`.
+    """
+    bind = db.get_bind()
+    if isinstance(bind.pool, (StaticPool, SingletonThreadPool)):
+        for loader in loaders:
+            loader(db)
+        return
+
+    scope = {k: v for k, v in db.info.items() if k != _CACHE_KEY}
+    sessions = {}  # worker thread -> its session, so each checks out one connection
+    lock = threading.Lock()
+
+    def run(loader):
+        with lock:
+            session = sessions.get(threading.get_ident())
+            if session is None:
+                session = Session(bind=bind, autoflush=False)
+                session.info.update(scope)
+                sessions[threading.get_ident()] = session
+        before = set(session.info.get(_CACHE_KEY, {}))
+        loader(session)
+        cache = session.info.get(_CACHE_KEY, {})
+        return {key: cache[key] for key in cache.keys() - before}
+
+    cache = db.info.setdefault(_CACHE_KEY, {})
+    try:
+        with ThreadPoolExecutor(max_workers=min(PREFETCH_WORKERS, len(loaders))) as pool:
+            for loaded in pool.map(run, loaders):
+                for key, value in loaded.items():
+                    cache.setdefault(key, value)
+    finally:
+        for session in sessions.values():
+            session.close()
+
+
+def get_all_insights(db: Session) -> dict:
+    """
+    One response instead of ten requests: each request against a remote
+    database pays its own connection checkout and round trips. The shared
+    base data is prefetched concurrently, then every section is computed
+    from that one cache.
+    """
+    _prefetch(
+        db,
+        [
+            _all_training_rows,  # also caches the latest outcome per training
+            _latest_employment_status_rows,
+            _employment_rows,
+            _followup_update_rows,
+            _wages_by_employment,
+            analytics_service.get_non_placement_reasons,
+            _followup_update_rows_with_group,
+            _employment_rows_with_group,
+            _trainee_districts,
+            _non_placement_by_trainee,
+            _completed_training_count,
+            _completed_followups_by_type,
+            _trainee_quality_rows,
+            _verified_employment_pks,
+            _consent_withdrawn_count,
+            _followups_by_status,
+        ],
+    )
+    return {
+        "summary": get_insight_summary(db),
+        "remedial_actions": get_remedial_actions(db),
+        "accountability": get_accountability(db),
+        "skill_gaps_by_course": get_skill_gaps_by_course(db),
+        "resource_allocation": get_resource_allocation(db),
+        "non_placement": get_non_placement_analysis(db),
+        "attrition": get_attrition_analysis(db),
+        "training_relevance": get_training_relevance_insights(db),
+        "longitudinal_outcomes": get_longitudinal_outcomes(db),
+        "data_quality": get_data_quality(db),
     }

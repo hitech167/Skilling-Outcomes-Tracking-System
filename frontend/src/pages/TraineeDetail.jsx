@@ -93,13 +93,16 @@ export default function TraineeDetail() {
   });
   const [contactError, setContactError] = useState(null);
 
-  const fetchTrainee = useCallback(async () => {
+  // `shared` reuses an identical request already in flight (the mount load,
+  // which StrictMode runs twice in development); refreshes fetch fresh.
+  const fetchTrainee = useCallback(async ({ shared = false } = {}) => {
     if (!id) return;
     setLoading(true);
     setNotFound(false);
 
     try {
-      const data = await api.get(`/api/trainees/${id}`);
+      const path = `/api/trainees/${id}`;
+      const data = await (shared ? api.getShared(path) : api.get(path));
       setTrainee(data);
       updateRecentTrainees(data.trainee_id, data.full_name);
     } catch (err) {
@@ -123,7 +126,7 @@ export default function TraineeDetail() {
   }, [trainee]);
 
   useEffect(() => {
-    fetchTrainee();
+    fetchTrainee({ shared: true });
   }, [fetchTrainee]);
 
   const fetchTrainingRecords = useCallback(async () => {

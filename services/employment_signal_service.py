@@ -12,11 +12,18 @@ verification for it is just resolved.
 
 Rows are independent: a bad row is reported, not fatal. With dry_run the
 whole file is checked and nothing is written.
+
+Performance: the database is usually remote, so a query per CSV row adds
+up fast (a 5,000-row file used to cost ~4 lookups per row before any
+writes). The lookups every row needs -- which trainee a row names, that
+trainee's employers and latest training -- are loaded up front in a few
+batched queries (SignalLookups) and kept in step as rows create records.
 """
 
 import csv
 import io
 import re
+from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
@@ -27,6 +34,7 @@ from database.models import (
     EmploymentRecord,
     Outcome,
     Trainee,
+    TraineeExternalId,
     TrainingRecord,
     WageHistory,
 )
@@ -34,9 +42,8 @@ from routes.employer_verifications import generate_verification_id
 from routes.employment import generate_employment_id
 from routes.outcomes import generate_outcome_id
 from routes.wage_history import generate_wage_record_id
-from services import identity_service
-
 MAX_ROWS = 5000
+IN_BATCH = 1000  # values per IN (...) list
 REQUIRED_HEADERS = {"employer_name", "start_date"}
 MATCH_HEADERS = {"trainee_id", "phone", "external_id"}
 
@@ -65,24 +72,98 @@ def parse_csv(raw: bytes) -> list[dict]:
     return rows
 
 
-def _find_trainee(db: Session, row: dict) -> Trainee | None:
+def _match_key(row: dict):
+    """
+    How a row identifies its trainee, in priority order: trainee_id, else
+    phone (last 10 digits), else external_id as TYPE:VALUE. Returns
+    (kind, value) or None. Only the first identifier present is used.
+    """
     if row.get("trainee_id"):
-        return db.query(Trainee).filter(Trainee.trainee_id == row["trainee_id"]).first()
+        return ("trainee_id", row["trainee_id"])
     if row.get("phone"):
-        digits = re.sub(r"\D", "", row["phone"])[-10:]
-        return db.query(Trainee).filter(Trainee.phone == digits).first()
+        return ("phone", re.sub(r"\D", "", row["phone"])[-10:])
     if row.get("external_id"):
         id_type, _, id_value = row["external_id"].partition(":")
         if id_value:
-            return identity_service.existing_owner(db, id_type.strip(), id_value.strip())
+            # Same matching as identity_service.existing_owner: exact value, any-case type
+            return ("external_id", (id_type.strip().lower(), id_value.strip()))
     return None
+
+
+def _batches(values):
+    values = list(values)
+    for i in range(0, len(values), IN_BATCH):
+        yield values[i : i + IN_BATCH]
+
+
+class SignalLookups:
+    """Everything the rows look up, loaded once for the whole file."""
+
+    def __init__(self, db: Session, rows: list[dict]):
+        keys = [k for k in (_match_key(r) for r in rows) if k is not None]
+        wanted = defaultdict(set)
+        for kind, value in keys:
+            wanted[kind].add(value)
+
+        self.by_key: dict = {}
+        for batch in _batches(wanted["trainee_id"]):
+            for t in db.query(Trainee).filter(Trainee.trainee_id.in_(batch)):
+                self.by_key[("trainee_id", t.trainee_id)] = t
+        for batch in _batches(wanted["phone"]):
+            for t in db.query(Trainee).filter(Trainee.phone.in_(batch)):
+                self.by_key[("phone", t.phone)] = t
+
+        wanted_ext = wanted["external_id"]
+        owner_pk = {}
+        for batch in _batches({value for _type, value in wanted_ext}):
+            links = (
+                db.query(TraineeExternalId)
+                .filter(TraineeExternalId.id_value.in_(batch))
+                .order_by(TraineeExternalId.id)
+            )
+            for link in links:
+                owner_pk.setdefault((link.id_type.lower(), link.id_value), link.trainee_pk_id)
+        ext_trainees = {}
+        for batch in _batches(set(owner_pk.values())):
+            for t in db.query(Trainee).filter(Trainee.id.in_(batch)):
+                ext_trainees[t.id] = t
+        for key, pk in owner_pk.items():
+            if key in wanted_ext and pk in ext_trainees:
+                self.by_key[("external_id", key)] = ext_trainees[pk]
+
+        trainee_pks = {t.id for t in self.by_key.values()}
+        # trainee pk -> [(employment pk, company_name)], oldest first
+        self.employments = defaultdict(list)
+        # trainee pk -> latest training pk (latest end_date, undated last, then highest id)
+        self.latest_training: dict = {}
+        best: dict = {}
+        for batch in _batches(trainee_pks):
+            for e in (
+                db.query(EmploymentRecord.id, EmploymentRecord.trainee_pk_id, EmploymentRecord.company_name)
+                .filter(EmploymentRecord.trainee_pk_id.in_(batch))
+                .order_by(EmploymentRecord.id)
+            ):
+                self.employments[e.trainee_pk_id].append((e.id, e.company_name))
+            for tr in db.query(
+                TrainingRecord.id, TrainingRecord.trainee_pk_id, TrainingRecord.end_date
+            ).filter(TrainingRecord.trainee_pk_id.in_(batch)):
+                rank = (tr.end_date is not None, tr.end_date or date.min, tr.id)
+                if tr.trainee_pk_id not in best or rank > best[tr.trainee_pk_id]:
+                    best[tr.trainee_pk_id] = rank
+                    self.latest_training[tr.trainee_pk_id] = tr.id
+
+    def trainee_for(self, row: dict) -> Trainee | None:
+        key = _match_key(row)
+        return self.by_key.get(key) if key is not None else None
 
 
 def _same_name(a: str | None, b: str | None) -> bool:
     return bool(a and b) and " ".join(a.lower().split()) == " ".join(b.lower().split())
 
 
-def process_row(db: Session, row: dict, source: str, dry_run: bool) -> tuple[str, str | None]:
+def process_row(
+    db: Session, row: dict, source: str, dry_run: bool, lookups: SignalLookups
+) -> tuple[str, str | None]:
     """Return (result, detail). Results: created, already_recorded, verified_existing,
     trainee_not_found, no_consent, no_training, invalid."""
     employer = row.get("employer_name", "")
@@ -103,15 +184,16 @@ def process_row(db: Session, row: dict, source: str, dry_run: bool) -> tuple[str
     if start > date.today():
         return "invalid", "start_date is in the future"
 
-    trainee = _find_trainee(db, row)
+    trainee = lookups.trainee_for(row)
     if trainee is None:
         return "trainee_not_found", None
     if not trainee.consent_given:
         return "no_consent", None
 
     existing = [
-        e for e in db.query(EmploymentRecord).filter(EmploymentRecord.trainee_pk_id == trainee.id)
-        if _same_name(e.company_name, employer)
+        employment_pk
+        for employment_pk, company_name in lookups.employments[trainee.id]
+        if _same_name(company_name, employer)
     ]
     reference = row.get("reference") or "no reference"
     note = f"Confirmed by external source {source} ({reference})"
@@ -120,7 +202,7 @@ def process_row(db: Session, row: dict, source: str, dry_run: bool) -> tuple[str
         pending = (
             db.query(EmployerVerification)
             .filter(
-                EmployerVerification.employment_pk_id == existing[0].id,
+                EmployerVerification.employment_pk_id == existing[0],
                 EmployerVerification.verification_status == "Pending",
             )
             .all()
@@ -136,13 +218,8 @@ def process_row(db: Session, row: dict, source: str, dry_run: bool) -> tuple[str
                 verification.verification_notes = note
         return "verified_existing", None
 
-    training = (
-        db.query(TrainingRecord)
-        .filter(TrainingRecord.trainee_pk_id == trainee.id)
-        .order_by(TrainingRecord.end_date.desc().nullslast(), TrainingRecord.id.desc())
-        .first()
-    )
-    if training is None:
+    training_pk = lookups.latest_training.get(trainee.id)
+    if training_pk is None:
         return "no_training", None
     if dry_run:
         return "created", None
@@ -151,7 +228,7 @@ def process_row(db: Session, row: dict, source: str, dry_run: bool) -> tuple[str
     outcome = Outcome(
         outcome_id=generate_outcome_id(db),
         trainee_pk_id=trainee.id,
-        training_record_pk_id=training.id,
+        training_record_pk_id=training_pk,
         outcome_type="Employed",
         status_date=today,
         notes=note,
@@ -170,6 +247,8 @@ def process_row(db: Session, row: dict, source: str, dry_run: bool) -> tuple[str
     )
     db.add(employment)
     db.flush()
+    # Later rows in this file for the same trainee + employer see this job
+    lookups.employments[trainee.id].append((employment.id, employer))
     if salary is not None:
         db.add(
             WageHistory(
@@ -214,8 +293,9 @@ def import_signals(db: Session, rows: list[dict], source: str, dry_run: bool) ->
         "invalid": 0,
         "problems": [],
     }
+    lookups = SignalLookups(db, rows)
     for number, row in enumerate(rows, start=2):  # row 1 is the header
-        result, detail = process_row(db, row, source, dry_run)
+        result, detail = process_row(db, row, source, dry_run, lookups)
         summary[result] += 1
         if result in ("invalid", "trainee_not_found", "no_training") and len(summary["problems"]) < 50:
             summary["problems"].append({"row": number, "result": result, "detail": detail})

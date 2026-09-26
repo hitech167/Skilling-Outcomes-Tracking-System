@@ -83,7 +83,8 @@ function DuplicateGroupDetail({ traineeIds }) {
 
     async function fetchProfiles() {
       const results = await Promise.allSettled(
-        traineeIds.map((id) => api.get(`/api/trainees/${encodeURIComponent(id)}`))
+        // Shared: StrictMode (development) runs this mount effect twice
+        traineeIds.map((id) => api.getShared(`/api/trainees/${encodeURIComponent(id)}`))
       );
       if (isMounted) {
         setProfiles(
@@ -157,7 +158,7 @@ export default function Identity() {
 
     async function fetchDuplicates() {
       try {
-        const data = await api.get('/api/identity/possible-duplicates');
+        const data = await api.getShared('/api/identity/possible-duplicates');
         if (isMounted) {
           setDuplicates(data);
           setDupError(null);
