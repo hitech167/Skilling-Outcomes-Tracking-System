@@ -9,6 +9,8 @@ import {
   MessageOutlined,
   BankOutlined,
   UploadOutlined,
+  BarChartOutlined,
+  BulbOutlined,
   LogoutOutlined,
   UserOutlined,
   MenuUnfoldOutlined,
@@ -54,6 +56,16 @@ const MENU_ITEMS = [
     key: '/import-placements',
     icon: <UploadOutlined />,
     label: <Link to="/import-placements">Import placements</Link>,
+  },
+  {
+    key: '/analytics',
+    icon: <BarChartOutlined />,
+    label: <Link to="/analytics">Analytics</Link>,
+  },
+  {
+    key: '/insights',
+    icon: <BulbOutlined />,
+    label: <Link to="/insights">Insights</Link>,
   },
 ];
 

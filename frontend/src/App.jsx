@@ -9,6 +9,7 @@ import Analytics from "./pages/Analytics";
 import Employers from "./pages/Employers";
 import Messages from "./pages/Messages";
 import ImportPlacements from "./pages/ImportPlacements";
+import Insights from "./pages/Insights";
 import StaffLayout from "./layouts/StaffLayout";
 
 function ProtectedRoute({ children }) {
@@ -45,6 +46,7 @@ function App() {
           <Route path="/trainees/:id" element={<TraineeDetail />} />
           <Route path="/followups" element={<Followups />} />
           <Route path="/analytics" element={<Analytics />} />
+          <Route path="/insights" element={<Insights />} />
           <Route path="/employers" element={<Employers />} />
           <Route path="/messages" element={<Messages />} />
           <Route path="/import-placements" element={<ImportPlacements />} />

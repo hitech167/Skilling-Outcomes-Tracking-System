@@ -7,6 +7,7 @@ import {
   BankOutlined,
   BarChartOutlined,
   UploadOutlined,
+  BulbOutlined,
 } from '@ant-design/icons';
 import { motion } from 'framer-motion';
 import { getMe, logout } from '../api/client';
@@ -48,6 +49,15 @@ const CARDS_CONFIG = [
     icon: <BarChartOutlined style={{ fontSize: 30, color: '#722ed1' }} />,
     roles: ['admin', 'analyst'],
     path: '/analytics',
+    available: true,
+  },
+  {
+    key: 'insights',
+    title: 'Insights',
+    description: 'Rule-based findings on skill gaps, attrition, and data quality.',
+    icon: <BulbOutlined style={{ fontSize: 30, color: '#faad14' }} />,
+    roles: ['admin', 'analyst'],
+    path: '/insights',
     available: true,
   },
   {
