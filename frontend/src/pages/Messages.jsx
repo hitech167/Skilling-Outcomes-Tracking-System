@@ -88,7 +88,8 @@ export default function Messages() {
     async function fetchNotifications() {
       const query = statusFilter === 'All' ? '' : `&status=${statusFilter}`;
       try {
-        const data = await api.get(`/api/notifications?limit=500${query}`);
+        // Shared: StrictMode (development) runs this effect twice on mount
+        const data = await api.getShared(`/api/notifications?limit=500${query}`);
         if (isMounted) {
           setNotifications(Array.isArray(data) ? data : []);
           setLoadError(null);

@@ -17,10 +17,10 @@ from routes/followup_tracking.py, no background workers.
 from calendar import monthrange
 from datetime import date, timedelta
 
-from sqlalchemy import text
+from sqlalchemy import and_, case, func, text
 from sqlalchemy.orm import Session
 
-from database.models import FollowUp
+from database.models import FollowUp, Trainee, TrainingRecord
 
 # (followup_type, days_offset, months_offset) — exactly one of the two
 # offsets is used per row; the other is 0.
@@ -100,23 +100,42 @@ def generate_schedule_for_training(
     return created
 
 
-def get_overdue_followups(db: Session) -> list[FollowUp]:
+def _followup_list_query(db: Session):
+    """
+    Follow-ups with their trainee's and training's public IDs, fetched in
+    ONE joined query (not one lookup per row), selecting only the columns
+    the list responses use. Rows have: followup_id, followup_type,
+    scheduled_date, status, trainee_id, training_id.
+    """
+    return db.query(
+        FollowUp.followup_id,
+        FollowUp.followup_type,
+        FollowUp.scheduled_date,
+        FollowUp.status,
+        Trainee.trainee_id,
+        TrainingRecord.record_id.label("training_id"),
+    ).join(Trainee, Trainee.id == FollowUp.trainee_pk_id).join(
+        TrainingRecord, TrainingRecord.id == FollowUp.training_record_pk_id
+    )
+
+
+def get_overdue_followups(db: Session) -> list:
     """Scheduled follow-ups whose scheduled_date has already passed."""
     today = date.today()
     return (
-        db.query(FollowUp)
+        _followup_list_query(db)
         .filter(FollowUp.status == "Scheduled", FollowUp.scheduled_date < today)
         .order_by(FollowUp.scheduled_date)
         .all()
     )
 
 
-def get_upcoming_followups(db: Session, days: int) -> list[FollowUp]:
+def get_upcoming_followups(db: Session, days: int) -> list:
     """Scheduled follow-ups due within the next `days` days (today included)."""
     today = date.today()
     horizon = today + timedelta(days=days)
     return (
-        db.query(FollowUp)
+        _followup_list_query(db)
         .filter(
             FollowUp.status == "Scheduled",
             FollowUp.scheduled_date >= today,
@@ -127,11 +146,11 @@ def get_upcoming_followups(db: Session, days: int) -> list[FollowUp]:
     )
 
 
-def get_pending_followups(db: Session) -> list[FollowUp]:
+def get_pending_followups(db: Session) -> list:
     """Scheduled follow-ups that are due (scheduled_date <= today)."""
     today = date.today()
     return (
-        db.query(FollowUp)
+        _followup_list_query(db)
         .filter(FollowUp.status == "Scheduled", FollowUp.scheduled_date <= today)
         .order_by(FollowUp.scheduled_date)
         .all()
@@ -142,33 +161,23 @@ def get_admin_summary_counts(db: Session) -> dict:
     """Dynamically calculated counts for GET /api/followups/summary."""
     today = date.today()
     horizon_7 = today + timedelta(days=7)
+    scheduled = FollowUp.status == "Scheduled"
 
-    total = db.query(FollowUp).count()
-    scheduled = db.query(FollowUp).filter(FollowUp.status == "Scheduled").count()
-    completed = db.query(FollowUp).filter(FollowUp.status == "Completed").count()
-    missed = db.query(FollowUp).filter(FollowUp.status == "Missed").count()
-    not_reachable = db.query(FollowUp).filter(FollowUp.status == "Not Reachable").count()
-    overdue = (
-        db.query(FollowUp)
-        .filter(FollowUp.status == "Scheduled", FollowUp.scheduled_date < today)
-        .count()
-    )
-    upcoming_7_days = (
-        db.query(FollowUp)
-        .filter(
-            FollowUp.status == "Scheduled",
-            FollowUp.scheduled_date >= today,
-            FollowUp.scheduled_date <= horizon_7,
-        )
-        .count()
-    )
+    def count_where(*conditions):
+        # COALESCE: SUM over an empty table is NULL, the count should be 0
+        return func.coalesce(func.sum(case((and_(*conditions), 1), else_=0)), 0)
 
-    return {
-        "total": total,
-        "scheduled": scheduled,
-        "completed": completed,
-        "missed": missed,
-        "not_reachable": not_reachable,
-        "overdue": overdue,
-        "upcoming_7_days": upcoming_7_days,
-    }
+    # All seven counts in one pass over the table instead of seven COUNT queries
+    row = db.query(
+        func.count(FollowUp.id).label("total"),
+        count_where(scheduled).label("scheduled"),
+        count_where(FollowUp.status == "Completed").label("completed"),
+        count_where(FollowUp.status == "Missed").label("missed"),
+        count_where(FollowUp.status == "Not Reachable").label("not_reachable"),
+        count_where(scheduled, FollowUp.scheduled_date < today).label("overdue"),
+        count_where(
+            scheduled, FollowUp.scheduled_date >= today, FollowUp.scheduled_date <= horizon_7
+        ).label("upcoming_7_days"),
+    ).one()
+
+    return {key: int(value) for key, value in row._asdict().items()}

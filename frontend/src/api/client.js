@@ -37,8 +37,23 @@ async function request(path, options = {}) {
     return response.json();
 }
 
+// Identical GETs already in flight share one request. Used for loads that run
+// on mount, which React StrictMode runs twice in development.
+const inflightGets = new Map();
+
+function getShared(path) {
+    if (!inflightGets.has(path)) {
+        const promise = request(path, { method: "GET" }).finally(() => {
+            inflightGets.delete(path);
+        });
+        inflightGets.set(path, promise);
+    }
+    return inflightGets.get(path);
+}
+
 export const api = {
     get: (path) => request(path, { method: "GET" }),
+    getShared,
     post: (path, body) =>
         request(path, {
             method: "POST",

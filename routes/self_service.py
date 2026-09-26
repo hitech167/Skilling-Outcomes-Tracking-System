@@ -224,13 +224,19 @@ def create_verification_request(
     )
 
 
-def _notification_item(n: Notification, db: Session) -> NotificationItem:
-    trainee_id, trainee_name = (
-        db.query(Trainee.trainee_id, Trainee.full_name).filter(Trainee.id == n.trainee_pk_id).one()
+def _notification_rows(db: Session):
+    """
+    Notifications with the trainee's public ID + name and the follow-up's
+    public ID, in ONE joined query instead of 1-2 lookups per notification.
+    """
+    return (
+        db.query(Notification, Trainee.trainee_id, Trainee.full_name, FollowUp.followup_id)
+        .join(Trainee, Trainee.id == Notification.trainee_pk_id)
+        .outerjoin(FollowUp, FollowUp.id == Notification.followup_pk_id)
     )
-    followup_id = None
-    if n.followup_pk_id is not None:
-        followup_id = db.query(FollowUp.followup_id).filter(FollowUp.id == n.followup_pk_id).scalar()
+
+
+def _notification_item(n: Notification, trainee_id: str, trainee_name: str, followup_id) -> NotificationItem:
     return NotificationItem(
         notification_id=n.notification_id,
         trainee_id=trainee_id,
@@ -259,13 +265,13 @@ def list_notifications(
     limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
 ):
-    query = db.query(Notification)
+    query = _notification_rows(db)
     if purpose:
         query = query.filter(Notification.purpose == purpose.strip().upper())
     if status_filter:
         query = query.filter(Notification.status == status_filter.strip().capitalize())
     rows = query.order_by(Notification.id.desc()).limit(limit).all()
-    return [_notification_item(n, db) for n in rows]
+    return [_notification_item(*row) for row in rows]
 
 
 @admin_router.post(
@@ -286,8 +292,7 @@ def mark_notification_sent(notification_id: str, db: Session = Depends(get_db)):
     n.error = None
     n.sent_at = datetime.now(timezone.utc)
     db.commit()
-    db.refresh(n)
-    return _notification_item(n, db)
+    return _notification_item(*_notification_rows(db).filter(Notification.id == n.id).one())
 
 
 # =====================================================================

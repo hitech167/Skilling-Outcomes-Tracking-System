@@ -168,23 +168,21 @@ def _training_id_lookup(db: Session, training_record_pk_id: int) -> str:
 def list_trainee_followups(trainee_id: str, db: Session = Depends(get_db)):
     trainee = get_trainee_or_404(trainee_id, db)
 
-    followups = (
-        db.query(FollowUp)
+    from database.models import TrainingRecord
+
+    # Training and outcome public IDs come from the same query (not one lookup per row)
+    rows = (
+        db.query(FollowUp, TrainingRecord.record_id, Outcome.outcome_id)
+        .join(TrainingRecord, TrainingRecord.id == FollowUp.training_record_pk_id)
+        .outerjoin(Outcome, Outcome.id == FollowUp.outcome_pk_id)
         .filter(FollowUp.trainee_pk_id == trainee.id)
         .order_by(FollowUp.scheduled_date)
         .all()
     )
-
-    results = []
-    for followup in followups:
-        training_id = _training_id_lookup(db, followup.training_record_pk_id)
-        outcome_public_id = None
-        if followup.outcome_pk_id is not None:
-            outcome = db.query(Outcome).filter(Outcome.id == followup.outcome_pk_id).first()
-            outcome_public_id = outcome.outcome_id if outcome else None
-        results.append(to_response(followup, trainee.trainee_id, training_id, outcome_public_id))
-
-    return results
+    return [
+        to_response(followup, trainee.trainee_id, training_id, outcome_public_id)
+        for followup, training_id, outcome_public_id in rows
+    ]
 
 
 @router.patch(

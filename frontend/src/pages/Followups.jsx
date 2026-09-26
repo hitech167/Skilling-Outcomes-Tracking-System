@@ -142,11 +142,13 @@ export default function Followups() {
     document.title = 'Follow-up Queue — Skilling Outcomes Tracking System';
   }, []);
 
-  // Fetch summary counts
-  const fetchSummary = useCallback(async () => {
+  // Fetch summary counts. `shared` reuses an identical request already in
+  // flight (mount loads); refreshes after an action always fetch fresh.
+  const fetchSummary = useCallback(async ({ shared = false } = {}) => {
     setSummaryLoading(true);
     try {
-      const res = await api.get('/api/followups/summary');
+      const path = '/api/followups/summary';
+      const res = await (shared ? api.getShared(path) : api.get(path));
       setSummary(res && typeof res === 'object' ? res : {});
     } catch {
       setSummary({});
@@ -156,16 +158,17 @@ export default function Followups() {
   }, []);
 
   useEffect(() => {
-    fetchSummary();
+    fetchSummary({ shared: true });
   }, [fetchSummary]);
 
   // Fetch tab data
-  const fetchTabFollowups = useCallback(async (tabKey) => {
+  const fetchTabFollowups = useCallback(async (tabKey, { shared = false } = {}) => {
     setTabLoading((prev) => ({ ...prev, [tabKey]: true }));
     setTabError((prev) => ({ ...prev, [tabKey]: null }));
 
     try {
-      const res = await api.get(`/api/followups/${tabKey}`);
+      const path = `/api/followups/${tabKey}`;
+      const res = await (shared ? api.getShared(path) : api.get(path));
       const list = Array.isArray(res) ? res : [];
       setTabData((prev) => ({ ...prev, [tabKey]: list }));
     } catch (err) {
@@ -177,19 +180,17 @@ export default function Followups() {
     }
   }, []);
 
-  // Fetch initial tab data on mount or when tab changes
+  // Fetch a tab's data the first time it is shown (on mount and on tab change)
   useEffect(() => {
     if (tabData[activeTab] === null) {
-      fetchTabFollowups(activeTab);
+      fetchTabFollowups(activeTab, { shared: true });
     }
   }, [activeTab, tabData, fetchTabFollowups]);
 
-  // Handle Tab Switch
+  // Handle Tab Switch. The effect above loads the tab; fetching here as well
+  // requested every newly opened tab twice.
   const handleTabChange = (key) => {
     setActiveTab(key);
-    if (tabData[key] === null) {
-      fetchTabFollowups(key);
-    }
   };
 
   // Dispatch all due check-ins

@@ -201,8 +201,8 @@ def _to_list_item(followup: FollowUp, db: Session) -> FollowUpListItem:
     summary="Follow-ups that are due now (Scheduled, scheduled_date <= today)",
 )
 def list_pending_followups(db: Session = Depends(get_db)):
-    followups = followup_scheduler.get_pending_followups(db)
-    return [_to_list_item(f, db) for f in followups]
+    # Rows already carry trainee_id / training_id (one joined query)
+    return [FollowUpListItem(**row._asdict()) for row in followup_scheduler.get_pending_followups(db)]
 
 
 @router.get(
@@ -213,8 +213,10 @@ def list_pending_followups(db: Session = Depends(get_db)):
 def list_upcoming_followups(
     days: int = Query(7, ge=1, le=1000), db: Session = Depends(get_db)
 ):
-    followups = followup_scheduler.get_upcoming_followups(db, days)
-    return [_to_list_item(f, db) for f in followups]
+    return [
+        FollowUpListItem(**row._asdict())
+        for row in followup_scheduler.get_upcoming_followups(db, days)
+    ]
 
 
 @router.get(
@@ -228,8 +230,8 @@ def list_overdue_followups(db: Session = Depends(get_db)):
     return [
         OverdueFollowUpItem(
             followup_id=f.followup_id,
-            trainee_id=_trainee_public_id(db, f.trainee_pk_id),
-            training_id=_training_public_id(db, f.training_record_pk_id),
+            trainee_id=f.trainee_id,
+            training_id=f.training_id,
             followup_type=f.followup_type,
             scheduled_date=f.scheduled_date,
             days_overdue=(today - f.scheduled_date).days,
