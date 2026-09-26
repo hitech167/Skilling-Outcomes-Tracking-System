@@ -33,13 +33,23 @@ from email.message import EmailMessage
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from database.models import FollowUp, Notification, Trainee, TrainingRecord
-from services.auth import PURPOSE_SELF_REPORT, create_link_token
+from database.models import (
+    EmployerVerification,
+    EmploymentRecord,
+    FollowUp,
+    Notification,
+    Trainee,
+    TrainingRecord,
+)
+from services.auth import PURPOSE_EMPLOYER_VERIFY, PURPOSE_PROFILE, PURPOSE_SELF_REPORT, create_link_token
 
 logger = logging.getLogger(__name__)
 
 RESEND_AFTER_DAYS = 7
+EMPLOYER_MAX_REQUESTS = 3  # first request + 2 reminders
 LINK_VALID_DAYS = 30
+PROFILE_LINK_DAYS = 548  # about 18 months: covers the 12-month follow-up
+PROFILE_LINK_RESEND_HOURS = 1
 FOLLOWUP_LABELS = {
     "30_DAY": "30-day",
     "90_DAY": "90-day",
@@ -55,6 +65,11 @@ def public_base_url() -> str:
 def generate_notification_id(db: Session) -> str:
     next_number = db.execute(text("SELECT nextval('notification_id_seq')")).scalar()
     return f"NTF{next_number:06d}"
+
+
+def profile_link(trainee: Trainee) -> str:
+    token = create_link_token(PURPOSE_PROFILE, trainee.trainee_id, PROFILE_LINK_DAYS)
+    return f"{public_base_url()}/my-profile/{token}"
 
 
 def self_report_link(followup: FollowUp) -> str:
@@ -145,7 +160,8 @@ def _followup_message(trainee: Trainee, training: TrainingRecord, followup: Foll
     return (
         f"Hello {first_name}, this is your {label} check-in after the "
         f"{training.course_name} course. Please tell us how you are doing "
-        f"(takes 1 minute): {link}"
+        f"(takes 1 minute): {link} . Changed your phone or moved? Update it here: "
+        f"{profile_link(trainee)}"
     )
 
 
@@ -217,3 +233,100 @@ def dispatch_due_followups(db: Session, today: date | None = None) -> dict:
 
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def remind_pending_verifications(db: Session) -> dict:
+    """
+    For every Pending employer verification with a contact: if the last
+    request is older than RESEND_AFTER_DAYS, send a reminder with a fresh
+    link. After EMPLOYER_MAX_REQUESTS requests with still no answer, mark
+    it 'Unable to Verify' (employer unresponsive) so it is visible in the
+    data rather than silently pending forever.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=RESEND_AFTER_DAYS)
+    summary = {"reminded": 0, "marked_unresponsive": 0, "skipped_no_contact": 0, "skipped_no_consent": 0, "notification_ids": []}
+
+    pending = db.query(EmployerVerification).filter(EmployerVerification.verification_status == "Pending").all()
+    for verification in pending:
+        contact = (verification.employer_contact or "").strip()
+        if not contact:
+            summary["skipped_no_contact"] += 1
+            continue
+        trainee = db.query(Trainee).filter(Trainee.id == verification.trainee_pk_id).one()
+        if not trainee.consent_given:
+            summary["skipped_no_consent"] += 1
+            continue
+        sent = (
+            db.query(Notification)
+            .filter(
+                Notification.purpose == "EMPLOYER_VERIFICATION",
+                Notification.trainee_pk_id == verification.trainee_pk_id,
+                Notification.recipient == contact,
+            )
+            .order_by(Notification.id)
+            .all()
+        )
+        if not sent or _aware(sent[-1].created_at) > cutoff:
+            continue
+
+        if len(sent) >= EMPLOYER_MAX_REQUESTS:
+            verification.verification_status = "Unable to Verify"
+            verification.verification_notes = (
+                f"Employer unresponsive after {len(sent)} confirmation requests."
+            )
+            summary["marked_unresponsive"] += 1
+            continue
+
+        employment = db.query(EmploymentRecord).filter(EmploymentRecord.id == verification.employment_pk_id).one()
+        token = create_link_token(PURPOSE_EMPLOYER_VERIFY, verification.verification_id, LINK_VALID_DAYS)
+        notification = Notification(
+            notification_id=generate_notification_id(db),
+            trainee_pk_id=verification.trainee_pk_id,
+            purpose="EMPLOYER_VERIFICATION",
+            channel="Email" if "@" in contact else "SMS",
+            recipient=contact,
+            message=(
+                f"Reminder: please confirm the employment of a trainee at {employment.company_name} "
+                f"({employment.job_role}). It takes one minute: {public_base_url()}/employer-verify/{token}"
+            ),
+        )
+        deliver(notification, subject="Reminder: employment confirmation request")
+        db.add(notification)
+        db.flush()
+        summary["reminded"] += 1
+        summary["notification_ids"].append(notification.notification_id)
+
+    db.commit()
+    return summary
+
+
+def send_profile_link(db: Session, trainee: Trainee, welcome: bool = False):
+    """Message the trainee their personal profile link. Caller commits."""
+    channel, recipient = _channel_and_recipient(trainee)
+    first_name = trainee.full_name.split()[0]
+    intro = "welcome to the skilling programme" if welcome else "here is your personal link"
+    notification = Notification(
+        notification_id=generate_notification_id(db),
+        trainee_pk_id=trainee.id,
+        purpose="PROFILE_LINK",
+        channel=channel,
+        recipient=recipient,
+        message=(
+            f"Hello {first_name}, {intro}. Use this link any time to "
+            f"update your phone number or location, or to change your consent: {profile_link(trainee)}"
+        ),
+    )
+    deliver(notification, subject="Your training profile link")
+    db.add(notification)
+    return notification
+
+
+def profile_link_recently_sent(db: Session, trainee: Trainee) -> bool:
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=PROFILE_LINK_RESEND_HOURS)
+    latest = (
+        db.query(Notification)
+        .filter(Notification.trainee_pk_id == trainee.id, Notification.purpose == "PROFILE_LINK")
+        .order_by(Notification.id.desc())
+        .first()
+    )
+    return latest is not None and latest.created_at is not None and _aware(latest.created_at) >= cutoff

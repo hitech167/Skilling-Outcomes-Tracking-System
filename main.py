@@ -22,6 +22,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -35,6 +36,7 @@ from routes import (
     auth,
     employer_verifications,
     employment,
+    employment_signals,
     employment_status,
     followup,
     followup_tracking,
@@ -42,6 +44,7 @@ from routes import (
     insights,
     non_placement,
     outcomes,
+    profile_links,
     self_employment,
     self_service,
     trainees,
@@ -138,6 +141,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---- CORS ------------------------------------------------------------
+# Browser frontends on another address need this. CORS_ORIGINS in .env is a
+# comma-separated list of allowed origins; unset = common local dev servers.
+# Auth is a bearer header, not cookies, so credentials are not allowed.
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173"
+)
+CORS_ORIGINS = [
+    origin.strip().rstrip("/")
+    for origin in (os.getenv("CORS_ORIGINS") or DEFAULT_CORS_ORIGINS).split(",")
+    if origin.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=False,
+)
+
 # ---- Access control ------------------------------------------------
 # Record-level routers carry personal data (phone, email, DOB, salary,
 # employer contact, employment details) -> admin only.
@@ -150,12 +173,14 @@ ANALYTICS_ACCESS = [Depends(require_analytics_access)]
 app.include_router(auth.router)
 # Signed single-use links for trainees / employers — no login by design.
 app.include_router(self_service.public_router)
+app.include_router(profile_links.public_router)
 app.include_router(identity.router, dependencies=ADMIN_ONLY)
 app.include_router(self_service.admin_router, dependencies=ADMIN_ONLY)
 app.include_router(trainees.router, dependencies=ADMIN_ONLY)
 app.include_router(training_records.router, dependencies=ADMIN_ONLY)
 app.include_router(outcomes.router, dependencies=ADMIN_ONLY)
 app.include_router(employment.router, dependencies=ADMIN_ONLY)
+app.include_router(employment_signals.router, dependencies=ADMIN_ONLY)
 app.include_router(self_employment.router, dependencies=ADMIN_ONLY)
 app.include_router(apprenticeship.router, dependencies=ADMIN_ONLY)
 app.include_router(non_placement.router, dependencies=ADMIN_ONLY)

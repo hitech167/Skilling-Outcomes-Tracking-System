@@ -7,7 +7,7 @@ validation rules live in one obvious place.
 
 import re
 from datetime import date
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -15,6 +15,7 @@ from schemas.identity import ExternalIdCreate
 
 # Only these three channels are allowed in Phase 1
 ALLOWED_CONTACT_METHODS = {"SMS", "Email", "Phone"}
+ConsentMethod = Literal["Paper form", "Digital form", "Verbal", "Self-service"]
 
 # Indian mobile numbers: 10 digits starting with 6-9.
 # We accept an optional +91 / 0 prefix and strip it before storing.
@@ -36,6 +37,11 @@ class TraineeCreate(BaseModel):
 
     # Consent statement 1 — required. Registration fails without it.
     consent_given: bool
+
+    # Evidence of how/by whom consent was captured (optional, kept in the
+    # consent history). Staff normally record it on the trainee's behalf.
+    consent_method: Optional[ConsentMethod] = None
+    consent_recorded_by: Optional[str] = Field(None, max_length=150)
 
     # Consent statements 2 and 3 from the form (aggregated analytics use,
     # privacy notice). consent_given is the recorded consent and covers
@@ -183,6 +189,27 @@ class ConsentUpdate(BaseModel):
     """Body of POST /api/trainees/{trainee_id}/consent (grant again or withdraw)."""
 
     consent_given: bool
+    method: Optional[ConsentMethod] = None
+    recorded_by: Optional[str] = Field(None, max_length=150)
+    notes: Optional[str] = Field(None, max_length=255)
+
+
+class PhoneVerifyRequest(BaseModel):
+    """Body of POST /api/me/{token}/contact/verify."""
+
+    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class LinkRequest(BaseModel):
+    """Body of POST /api/request-link: a trainee ID or the phone number on file."""
+
+    identifier: str = Field(..., min_length=3, max_length=30)
+
+
+class SelfConsentUpdate(BaseModel):
+    """Body of POST /api/self-report/{token}/consent (trainee withdraws or re-grants)."""
+
+    consent_given: bool
 
 
 class TraineeContact(BaseModel):
@@ -212,6 +239,9 @@ class TraineeCreateResponse(BaseModel):
     # Existing trainees with the same name and date of birth — a warning
     # for the admin to review, not an error.
     possible_duplicates: list[str] = []
+    # Personal link the trainee can use to update their phone / location or
+    # withdraw consent at any time (also sent to them as a welcome message).
+    profile_link: Optional[str] = None
 
 
 class TraineePublic(BaseModel):
