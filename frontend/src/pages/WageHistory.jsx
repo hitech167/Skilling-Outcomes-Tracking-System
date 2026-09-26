@@ -105,39 +105,11 @@ function SourceTags({ source, status }) {
   );
 }
 
-/** One employment's salary progression, using the backend's summary (monthly-normalised). */
-function EmploymentProgression({ employment }) {
-  const [summary, setSummary] = useState(null);
-  const [points, setPoints] = useState([]);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    let isMounted = true;
-    const id = encodeURIComponent(employment.employment_id);
-
-    async function fetchProgression() {
-      try {
-        const [summaryRes, historyRes] = await Promise.all([
-          // Shared: StrictMode (development) runs mount effects twice
-          api.getShared(`/api/employment/${id}/summary`),
-          api.getShared(`/api/employment/${id}/wage-history`),
-        ]);
-        if (isMounted) {
-          setSummary(summaryRes);
-          setPoints(historyRes?.wage_history || []);
-        }
-      } catch (err) {
-        if (isMounted) setError(err?.detail || 'Failed to load wage progression.');
-      }
-    }
-
-    fetchProgression();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [employment.employment_id]);
-
+/**
+ * One employment's salary progression, using the backend's summary
+ * (monthly-normalised). Data comes from the parent's single request.
+ */
+function EmploymentProgression({ employment, summary, points }) {
   const salary = summary?.salary;
   const growth = salary?.growth_percentage;
 
@@ -155,93 +127,85 @@ function EmploymentProgression({ employment }) {
       }
       extra={<Tag>{employment.current_status}</Tag>}
     >
-      {error ? (
-        <Alert type="error" showIcon message={error} />
-      ) : !summary ? (
-        <div style={{ textAlign: 'center', padding: '16px 0' }}>
-          <Spin />
-        </div>
-      ) : (
-        <>
-          <Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 12 }}>
-            {employment.employment_id} · joined {formatDate(employment.joining_date)}
-          </Text>
-          <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-            <Col xs={12} md={8}>
-              <Statistic
-                title="First (monthly)"
-                value={formatAmount(salary?.initial_monthly)}
-                styles={{ content: { fontSize: 20 } }}
-              />
-              {salary?.initial_period === 'Annual' && (
-                <Text type="secondary" style={{ fontSize: 11 }}>
-                  {formatAmount(salary.initial)} / year
-                </Text>
-              )}
-            </Col>
-            <Col xs={12} md={8}>
-              <Statistic
-                title="Latest (monthly)"
-                value={formatAmount(salary?.latest_monthly)}
-                styles={{ content: { fontSize: 20 } }}
-              />
-              {salary?.period === 'Annual' && (
-                <Text type="secondary" style={{ fontSize: 11 }}>
-                  {formatAmount(salary.latest)} / year
-                </Text>
-              )}
-            </Col>
-            <Col xs={24} md={8}>
-              <Statistic
-                title="Growth"
-                value={growth ?? '—'}
-                precision={growth !== null && growth !== undefined ? 1 : undefined}
-                suffix={growth !== null && growth !== undefined ? '%' : undefined}
-                styles={{
-                  content: {
-                    fontSize: 20,
-                    color:
-                      growth === null || growth === undefined
-                        ? undefined
-                        : growth >= 0
-                        ? '#3f8600'
-                        : '#cf1322',
-                  },
-                }}
-                prefix={
-                  growth === null || growth === undefined ? null : growth >= 0 ? (
-                    <ArrowUpOutlined />
-                  ) : (
-                    <ArrowDownOutlined />
-                  )
-                }
-              />
-            </Col>
-          </Row>
-          <Table
-            rowKey="wage_record_id"
-            size="small"
-            pagination={false}
-            dataSource={points}
-            locale={{ emptyText: 'No wage records for this employment' }}
-            scroll={{ x: 'max-content' }}
-            columns={[
-              { title: 'Effective', dataIndex: 'effective_date', key: 'effective_date', render: formatDate },
-              {
-                title: 'Salary',
-                key: 'salary',
-                align: 'right',
-                render: (_, r) => `${formatAmount(r.salary)} / ${r.salary_period === 'Annual' ? 'yr' : 'mo'}`,
-              },
-              {
-                title: 'Source',
-                key: 'source',
-                render: (_, r) => <SourceTags source={r.source} status={r.verification_status} />,
-              },
-            ]}
-          />
-        </>
-      )}
+      <>
+        <Text type="secondary" style={{ display: 'block', marginBottom: 12, fontSize: 12 }}>
+          {employment.employment_id} · joined {formatDate(employment.joining_date)}
+        </Text>
+        <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
+          <Col xs={12} md={8}>
+            <Statistic
+              title="First (monthly)"
+              value={formatAmount(salary?.initial_monthly)}
+              styles={{ content: { fontSize: 20 } }}
+            />
+            {salary?.initial_period === 'Annual' && (
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                {formatAmount(salary.initial)} / year
+              </Text>
+            )}
+          </Col>
+          <Col xs={12} md={8}>
+            <Statistic
+              title="Latest (monthly)"
+              value={formatAmount(salary?.latest_monthly)}
+              styles={{ content: { fontSize: 20 } }}
+            />
+            {salary?.period === 'Annual' && (
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                {formatAmount(salary.latest)} / year
+              </Text>
+            )}
+          </Col>
+          <Col xs={24} md={8}>
+            <Statistic
+              title="Growth"
+              value={growth ?? '—'}
+              precision={growth !== null && growth !== undefined ? 1 : undefined}
+              suffix={growth !== null && growth !== undefined ? '%' : undefined}
+              styles={{
+                content: {
+                  fontSize: 20,
+                  color:
+                    growth === null || growth === undefined
+                      ? undefined
+                      : growth >= 0
+                      ? '#3f8600'
+                      : '#cf1322',
+                },
+              }}
+              prefix={
+                growth === null || growth === undefined ? null : growth >= 0 ? (
+                  <ArrowUpOutlined />
+                ) : (
+                  <ArrowDownOutlined />
+                )
+              }
+            />
+          </Col>
+        </Row>
+        <Table
+          rowKey="wage_record_id"
+          size="small"
+          pagination={false}
+          dataSource={points}
+          locale={{ emptyText: 'No wage records for this employment' }}
+          scroll={{ x: 'max-content' }}
+          columns={[
+            { title: 'Effective', dataIndex: 'effective_date', key: 'effective_date', render: formatDate },
+            {
+              title: 'Salary',
+              key: 'salary',
+              align: 'right',
+              render: (_, r) => `${formatAmount(r.salary)} / ${r.salary_period === 'Annual' ? 'yr' : 'mo'}`,
+            },
+            {
+              title: 'Source',
+              key: 'source',
+              render: (_, r) => <SourceTags source={r.source} status={r.verification_status} />,
+            },
+          ]}
+        />
+      </>
     </Card>
   );
 }
@@ -256,12 +220,14 @@ function TraineeWageProgression({ traineeId }) {
 
     async function fetchEmployments() {
       try {
+        // Every job with its summary and wage records in one request
+        // (was 1 + 2 per job). Shared: StrictMode runs mount effects twice.
         const res = await api.getShared(
-          `/api/trainees/${encodeURIComponent(traineeId)}/employment-history`
+          `/api/trainees/${encodeURIComponent(traineeId)}/wage-progression`
         );
-        if (isMounted) setEmployments(res?.employment_history || []);
+        if (isMounted) setEmployments(res?.employments || []);
       } catch (err) {
-        if (isMounted) setError(err?.detail || 'Failed to load employment history.');
+        if (isMounted) setError(err?.detail || 'Failed to load wage progression.');
       }
     }
 
@@ -293,8 +259,13 @@ function TraineeWageProgression({ traineeId }) {
         style={{ marginBottom: 16 }}
         message="Growth compares the first and latest wage record of each job. Annual salaries are divided by 12 so they can be compared."
       />
-      {employments.map((e) => (
-        <EmploymentProgression key={e.employment_id} employment={e} />
+      {employments.map((job) => (
+        <EmploymentProgression
+          key={job.employment.employment_id}
+          employment={job.employment}
+          summary={job.summary}
+          points={job.wage_history}
+        />
       ))}
     </>
   );

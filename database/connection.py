@@ -42,6 +42,27 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 Base = declarative_base()
 
+# Sequences behind the public IDs (TRN000001, OUT000001, ...). They are not
+# tied to a table, so dropping the tables does not reset them; see
+# scripts/reset_database.py.
+ID_SEQUENCES = (
+    "trainee_id_seq",
+    "training_record_id_seq",
+    "outcome_id_seq",
+    "employment_id_seq",
+    "self_employment_id_seq",
+    "apprenticeship_id_seq",
+    "non_placement_id_seq",
+    "followup_id_seq",
+    "employer_verification_id_seq",
+    "wage_history_id_seq",
+    "employment_status_id_seq",
+    # Phase 5 — follow-up attempts and outcome-update snapshots
+    "followup_attempt_id_seq",
+    "followup_outcome_update_id_seq",
+    "notification_id_seq",
+)
+
 
 def get_db():
     """FastAPI dependency: give a DB session to a route, then close it."""
@@ -66,38 +87,8 @@ def init_db() -> None:
     # PostgreSQL sequences give us safe, gap-free-ish numbering even when
     # two requests happen at the same moment.
     with engine.begin() as conn:
-        conn.execute(text("CREATE SEQUENCE IF NOT EXISTS trainee_id_seq START 1"))
-        conn.execute(
-            text("CREATE SEQUENCE IF NOT EXISTS training_record_id_seq START 1")
-        )
-        conn.execute(text("CREATE SEQUENCE IF NOT EXISTS outcome_id_seq START 1"))
-        conn.execute(text("CREATE SEQUENCE IF NOT EXISTS employment_id_seq START 1"))
-        conn.execute(
-            text("CREATE SEQUENCE IF NOT EXISTS self_employment_id_seq START 1")
-        )
-        conn.execute(
-            text("CREATE SEQUENCE IF NOT EXISTS apprenticeship_id_seq START 1")
-        )
-        conn.execute(
-            text("CREATE SEQUENCE IF NOT EXISTS non_placement_id_seq START 1")
-        )
-        conn.execute(text("CREATE SEQUENCE IF NOT EXISTS followup_id_seq START 1"))
-        conn.execute(
-            text("CREATE SEQUENCE IF NOT EXISTS employer_verification_id_seq START 1")
-        )
-        conn.execute(text("CREATE SEQUENCE IF NOT EXISTS wage_history_id_seq START 1"))
-        conn.execute(
-            text("CREATE SEQUENCE IF NOT EXISTS employment_status_id_seq START 1")
-        )
-        # Phase 5 — follow-up attempts and outcome-update snapshots
-        conn.execute(
-            text("CREATE SEQUENCE IF NOT EXISTS followup_attempt_id_seq START 1")
-        )
-        conn.execute(
-            text("CREATE SEQUENCE IF NOT EXISTS followup_outcome_update_id_seq START 1")
-        )
-
-        conn.execute(text("CREATE SEQUENCE IF NOT EXISTS notification_id_seq START 1"))
+        for sequence in ID_SEQUENCES:
+            conn.execute(text(f"CREATE SEQUENCE IF NOT EXISTS {sequence} START 1"))
 
         # Phase 8 — additive, nullable columns on an existing table.
         # create_all() never alters existing tables, so add them here.

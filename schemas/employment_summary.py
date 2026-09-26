@@ -11,6 +11,8 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from schemas.wage_history import WageHistoryResponse
+
 
 class VerificationSummary(BaseModel):
     status: str
@@ -62,3 +64,22 @@ class TraineeEmploymentHistoryResponse(BaseModel):
 
     trainee_id: str
     employment_history: list[EmploymentHistoryItem]
+
+
+class EmploymentWageProgression(BaseModel):
+    """One job: its employment-history entry, its summary and its wage records."""
+
+    employment: EmploymentHistoryItem
+    summary: EmploymentSummaryResponse
+    wage_history: list[WageHistoryResponse]
+
+
+class TraineeWageProgressionResponse(BaseModel):
+    """
+    Body of GET /api/trainees/{trainee_id}/wage-progression: for every job,
+    what GET /employment-history, GET /employment/{id}/summary and
+    GET /employment/{id}/wage-history return, in one response.
+    """
+
+    trainee_id: str
+    employments: list[EmploymentWageProgression]

@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Card, Spin, Typography, Row, Col, Tag, Space } from 'antd';
+import { useEffect } from 'react';
+import { useNavigate, useOutletContext } from 'react-router-dom';
+import { Alert, Card, Typography, Row, Col, Tag, Space } from 'antd';
 import {
   TeamOutlined,
   PhoneOutlined,
@@ -12,7 +12,6 @@ import {
   LineChartOutlined,
 } from '@ant-design/icons';
 import { motion } from 'framer-motion';
-import { getMe, logout } from '../api/client';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -112,55 +111,14 @@ const itemVariants = {
 };
 
 export default function Dashboard() {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
+  // StaffLayout already loaded the signed-in user (and sends a 401 back to
+  // the login page), so the dashboard does not fetch it again.
+  const { user } = useOutletContext();
   const navigate = useNavigate();
 
   useEffect(() => {
     document.title = "Dashboard — Skilling Outcomes Tracking System";
-    let isMounted = true;
-
-    async function fetchUser() {
-      try {
-        const userData = await getMe();
-        if (isMounted) {
-          setUser(userData);
-        }
-      } catch (err) {
-        if (err?.status === 401 || !sessionStorage.getItem('token')) {
-          logout();
-          navigate('/login', { replace: true });
-        } else {
-          navigate('/login', { replace: true });
-        }
-      } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
-      }
-    }
-
-    fetchUser();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [navigate]);
-
-  if (loading) {
-    return (
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          padding: '60px 0',
-        }}
-      >
-        <Spin size="large" />
-      </div>
-    );
-  }
+  }, []);
 
   const role = user?.role?.toLowerCase() || '';
   const visibleCards = CARDS_CONFIG.filter((card) =>
@@ -177,6 +135,15 @@ export default function Dashboard() {
           Access modules and manage tracking data according to your permissions.
         </Text>
       </div>
+
+      {!user && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 24 }}
+          message="Could not load your account details, so no modules are shown. Please refresh the page."
+        />
+      )}
 
       <motion.div
         variants={containerVariants}

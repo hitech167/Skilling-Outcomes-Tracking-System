@@ -5,12 +5,14 @@ POST /api/employment-status                              -> record a status chan
 GET  /api/employment/{employment_id}/status-history        -> list status history, oldest first
 GET  /api/employment/{employment_id}/summary                -> combined employment view
 GET  /api/trainees/{trainee_id}/employment-history          -> all employments for a trainee
+GET  /api/trainees/{trainee_id}/wage-progression            -> every job with its summary + wage records
 
 Old status rows are never deleted — the sequence over time is the
 retention timeline (Active -> Active -> Left Job, etc).
 """
 
 import logging
+from collections import defaultdict
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
@@ -31,11 +33,14 @@ from schemas.employment_status import (
     EmploymentStatusHistoryListResponse,
     EmploymentStatusResponse,
 )
+from routes.wage_history import to_response as wage_to_response
 from schemas.employment_summary import (
     EmploymentHistoryItem,
     EmploymentSummaryResponse,
+    EmploymentWageProgression,
     SalarySummary,
     TraineeEmploymentHistoryResponse,
+    TraineeWageProgressionResponse,
     VerificationSummary,
 )
 
@@ -179,6 +184,30 @@ def get_employment_summary(employment_id: str, db: Session = Depends(get_db)):
         .order_by(EmployerVerification.id.desc())
         .first()
     )
+    wage_records = (
+        db.query(WageHistory)
+        .filter(WageHistory.employment_pk_id == employment.id)
+        .order_by(WageHistory.effective_date.asc(), WageHistory.id.asc())
+        .all()
+    )
+    # Count and latest status from one query instead of two
+    statuses = [
+        s
+        for (s,) in db.query(EmploymentStatusHistory.employment_status)
+        .filter(EmploymentStatusHistory.employment_pk_id == employment.id)
+        .order_by(EmploymentStatusHistory.status_date.asc(), EmploymentStatusHistory.id.asc())
+    ]
+    return _build_summary(employment, latest_verification, wage_records, statuses)
+
+
+def _build_summary(
+    employment: EmploymentRecord, latest_verification, wage_records: list, statuses: list
+) -> EmploymentSummaryResponse:
+    """
+    The combined employment view, from already-loaded data: the latest
+    verification (or None), wage records oldest first, and the status
+    history values oldest first.
+    """
     verification_summary = None
     if latest_verification is not None:
         verification_summary = VerificationSummary(
@@ -186,12 +215,6 @@ def get_employment_summary(employment_id: str, db: Session = Depends(get_db)):
             method=latest_verification.verification_method,
         )
 
-    wage_records = (
-        db.query(WageHistory)
-        .filter(WageHistory.employment_pk_id == employment.id)
-        .order_by(WageHistory.effective_date.asc(), WageHistory.id.asc())
-        .all()
-    )
     if wage_records:
         first, last = wage_records[0], wage_records[-1]
         progression = wage_progression_for(wage_records)
@@ -210,15 +233,8 @@ def get_employment_summary(employment_id: str, db: Session = Depends(get_db)):
         fallback = float(employment.salary) if employment.salary is not None else None
         salary_summary = SalarySummary(initial=fallback, latest=fallback)
 
-    # Count and latest status from one query instead of two
-    statuses = (
-        db.query(EmploymentStatusHistory.employment_status)
-        .filter(EmploymentStatusHistory.employment_pk_id == employment.id)
-        .order_by(EmploymentStatusHistory.status_date.asc(), EmploymentStatusHistory.id.asc())
-        .all()
-    )
     status_count = len(statuses)
-    current_status = statuses[-1].employment_status if statuses else employment.employment_status
+    current_status = statuses[-1] if statuses else employment.employment_status
 
     return EmploymentSummaryResponse(
         employment_id=employment.employment_id,
@@ -263,3 +279,65 @@ def get_trainee_employment_history(trainee_id: str, db: Session = Depends(get_db
             for emp in employments
         ],
     )
+
+
+@router.get(
+    "/api/trainees/{trainee_id}/wage-progression",
+    response_model=TraineeWageProgressionResponse,
+    summary="Every job of a trainee with its summary and wage records, in one response",
+)
+def get_trainee_wage_progression(trainee_id: str, db: Session = Depends(get_db)):
+    """
+    What the Wage History page's progression view used to assemble from
+    1 + 2 x (number of jobs) requests. Loads each kind of record for all the
+    trainee's jobs at once, so it is five queries however many jobs there are.
+    """
+    trainee = get_trainee_or_404(trainee_id, db)
+    employments = (
+        db.query(EmploymentRecord)
+        .filter(EmploymentRecord.trainee_pk_id == trainee.id)
+        .order_by(EmploymentRecord.joining_date.asc())
+        .all()
+    )
+    ids = [e.id for e in employments]
+
+    latest_verification, wages, statuses = {}, defaultdict(list), defaultdict(list)
+    if ids:
+        for v in (
+            db.query(EmployerVerification)
+            .filter(EmployerVerification.employment_pk_id.in_(ids))
+            .order_by(EmployerVerification.id.asc())
+        ):
+            latest_verification[v.employment_pk_id] = v  # ascending, so the latest wins
+        for w in (
+            db.query(WageHistory)
+            .filter(WageHistory.employment_pk_id.in_(ids))
+            .order_by(WageHistory.effective_date.asc(), WageHistory.id.asc())
+        ):
+            wages[w.employment_pk_id].append(w)
+        for employment_pk_id, status_value in (
+            db.query(EmploymentStatusHistory.employment_pk_id, EmploymentStatusHistory.employment_status)
+            .filter(EmploymentStatusHistory.employment_pk_id.in_(ids))
+            .order_by(EmploymentStatusHistory.status_date.asc(), EmploymentStatusHistory.id.asc())
+        ):
+            statuses[employment_pk_id].append(status_value)
+
+    result = []
+    for emp in employments:
+        summary = _build_summary(emp, latest_verification.get(emp.id), wages[emp.id], statuses[emp.id])
+        result.append(
+            EmploymentWageProgression(
+                employment=EmploymentHistoryItem(
+                    employment_id=emp.employment_id,
+                    company_name=emp.company_name,
+                    job_role=emp.job_role,
+                    joining_date=emp.joining_date,
+                    current_status=summary.current_status,
+                ),
+                summary=summary,
+                wage_history=[
+                    wage_to_response(w, emp.employment_id, trainee.trainee_id) for w in wages[emp.id]
+                ],
+            )
+        )
+    return TraineeWageProgressionResponse(trainee_id=trainee.trainee_id, employments=result)

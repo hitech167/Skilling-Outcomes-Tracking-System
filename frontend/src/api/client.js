@@ -41,11 +41,32 @@ async function request(path, options = {}) {
 // on mount, which React StrictMode runs twice in development.
 const inflightGets = new Map();
 
+// One-shot handoff: a page that has just fetched what the next page loads on
+// mount (e.g. the trainee search, which checks the trainee exists before
+// opening the profile) hands the response over instead of it being fetched
+// twice. Used at most once, only within a few seconds, and kept in memory
+// only, so a reload or a later visit always fetches fresh data.
+const HANDOFF_MS = 10000;
+const handoffs = new Map();
+
+function handOff(path, data) {
+    handoffs.set(path, { data, at: Date.now() });
+}
+
+function takeHandOff(path) {
+    const entry = handoffs.get(path);
+    handoffs.delete(path);
+    return entry && Date.now() - entry.at < HANDOFF_MS ? entry : null;
+}
+
 function getShared(path) {
     if (!inflightGets.has(path)) {
-        const promise = request(path, { method: "GET" }).finally(() => {
-            inflightGets.delete(path);
-        });
+        const handed = takeHandOff(path);
+        const promise = (handed ? Promise.resolve(handed.data) : request(path, { method: "GET" })).finally(
+            () => {
+                inflightGets.delete(path);
+            }
+        );
         inflightGets.set(path, promise);
     }
     return inflightGets.get(path);
@@ -54,6 +75,7 @@ function getShared(path) {
 export const api = {
     get: (path) => request(path, { method: "GET" }),
     getShared,
+    handOff,
     post: (path, body) =>
         request(path, {
             method: "POST",
@@ -62,6 +84,19 @@ export const api = {
     patch: (path, body) => request(path, { method: "PATCH", body: JSON.stringify(body) }),
     delete: (path) => request(path, { method: "DELETE" }),
 };
+
+/**
+ * A message for an error from request()/login(): the backend's own detail
+ * when it sent one, a connection message when the server could not be
+ * reached at all (fetch threw, so there is no status), else `fallback`.
+ */
+export function errorMessage(err, fallback) {
+    if (typeof err?.detail === "string" && err.detail) return err.detail;
+    if (err?.status === undefined) {
+        return "Could not reach the server. Check your connection and try again.";
+    }
+    return fallback;
+}
 
 export async function login(username, password) {
     const body = new URLSearchParams();
@@ -86,7 +121,7 @@ export async function login(username, password) {
 }
 
 export async function getMe() {
-    return api.get("/api/auth/me");
+    return api.getShared("/api/auth/me");
 }
 
 export function logout() {

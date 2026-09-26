@@ -8,6 +8,7 @@ from database.models import Notification, PhoneChangeRequest
 from services import contact_service
 from tests.test_gap_features import _due_followup, _token_from
 from tests.test_phase8_hardening import (
+    add_status,
     admin,
     anon,
     get_ok,
@@ -264,3 +265,44 @@ def test_trainee_can_see_own_record_masked_and_without_wages(isolated_db):
     assert record["consent"]["history"][0]["recorded_by"] == "You"
 
     assert anon.get("/api/me/garbage/record").status_code == 404
+
+
+def test_reminders_skip_superseded_verification_attempts(isolated_db):
+    trainee_id = make_trainee()
+    employment_id = make_employment(trainee_id, make_outcome(trainee_id, make_training(trainee_id), "Employed"))
+    # A second request for the same job replaces the first (both stay Pending as history)
+    for contact in ("old-hr@voltworks.example", "hr@voltworks.example"):
+        admin.post(f"/api/employment/{employment_id}/verification-request", json={"employer_contact": contact})
+    db = isolated_db()
+    for n in db.query(Notification).all():
+        n.created_at = datetime.now(timezone.utc) - timedelta(days=8)
+    db.commit()
+    db.close()
+
+    summary = admin.post("/api/verifications/remind-pending").json()
+    assert (summary["reminded"], summary["skipped_superseded"]) == (1, 1)
+    reminders = get_ok(admin, "/api/notifications", params={"limit": 500})
+    assert [n["recipient"] for n in reminders if n["message"].startswith("Reminder:")] == ["hr@voltworks.example"]
+
+
+def test_own_record_shows_current_job_status_in_date_order(isolated_db):
+    trainee_id = make_trainee()
+    later = make_employment(trainee_id, make_outcome(trainee_id, make_training(trainee_id), "Employed"),
+                            company_name="Later Co", joining_date="2025-06-01")
+    make_employment(trainee_id, make_outcome(trainee_id, make_training(trainee_id), "Employed"),
+                    company_name="Earlier Co", joining_date="2024-03-01")
+    outcome_id = make_outcome(trainee_id, make_training(trainee_id), "Self-employed")
+    assert admin.post("/api/self-employment", json={
+        "outcome_id": outcome_id, "trainee_id": trainee_id, "business_name": "Spark Repairs",
+        "business_type": "Electrical repair", "start_date": "2024-09-10", "monthly_income": 18000,
+    }).status_code == 201
+    add_status(trainee_id, later, "Left Job", "2025-09-01", reason="Relocation")
+
+    work = get_ok(anon, f"/api/me/{_profile_token(trainee_id)}/record")["work"]
+    assert [(w["organisation"], w["since"]) for w in work] == [
+        ("Earlier Co", "2024-03-01"), ("Spark Repairs", "2024-09-10"), ("Later Co", "2025-06-01"),
+    ]
+    # Same current status staff see, not the status the job started with
+    assert work[2]["status"] == "Left Job"
+    assert work[2]["status"] == get_ok(admin, f"/api/employment/{later}/summary")["current_status"]
+    assert work[0]["status"] == "Active"

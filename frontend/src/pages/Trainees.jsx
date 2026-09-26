@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Card, Input, Button, List, Typography, Alert, Space } from 'antd';
 import { SearchOutlined, UserAddOutlined, HistoryOutlined, RightOutlined } from '@ant-design/icons';
-import { api } from '../api/client';
+import { api, errorMessage as describeError } from '../api/client';
 
 const { Title, Text } = Typography;
 
@@ -39,10 +39,19 @@ export default function Trainees() {
     setErrorMessage('');
 
     try {
-      await api.get(`/api/trainees/${trimmedId}`);
+      const path = `/api/trainees/${trimmedId}`;
+      const trainee = await api.get(path);
+      // The profile page loads this same trainee on mount; hand it over
+      // instead of fetching it a second time.
+      api.handOff(path, trainee);
       navigate(`/trainees/${trimmedId}`);
     } catch (err) {
-      setErrorMessage('No trainee found with that ID');
+      // Only a 404 means the ID does not exist; anything else is a real error
+      setErrorMessage(
+        err?.status === 404
+          ? 'No trainee found with that ID'
+          : describeError(err, 'Could not look up the trainee. Please try again.')
+      );
     } finally {
       setLoading(false);
     }

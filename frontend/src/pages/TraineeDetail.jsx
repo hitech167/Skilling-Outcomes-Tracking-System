@@ -30,7 +30,7 @@ import {
   PlusOutlined,
   InfoCircleOutlined,
 } from '@ant-design/icons';
-import { api } from '../api/client';
+import { api, errorMessage } from '../api/client';
 import ExternalIds from '../components/ExternalIds';
 
 const { Title, Text, Paragraph } = Typography;
@@ -58,6 +58,7 @@ export default function TraineeDetail() {
   const [trainee, setTrainee] = useState(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [loadError, setLoadError] = useState(null);
   const [consentModalVisible, setConsentModalVisible] = useState(false);
   const [updatingConsent, setUpdatingConsent] = useState(false);
 
@@ -99,6 +100,7 @@ export default function TraineeDetail() {
     if (!id) return;
     setLoading(true);
     setNotFound(false);
+    setLoadError(null);
 
     try {
       const path = `/api/trainees/${id}`;
@@ -106,11 +108,12 @@ export default function TraineeDetail() {
       setTrainee(data);
       updateRecentTrainees(data.trainee_id, data.full_name);
     } catch (err) {
+      // Only a 404 means the trainee does not exist; a network or server
+      // error gets a retry instead of a misleading "not found"
       if (err?.status === 404) {
         setNotFound(true);
       } else {
-        message.error(err?.detail || 'Failed to load trainee profile');
-        setNotFound(true);
+        setLoadError(errorMessage(err, 'Failed to load the trainee profile.'));
       }
     } finally {
       setLoading(false);
@@ -212,14 +215,15 @@ export default function TraineeDetail() {
     const newConsentStatus = !trainee.consent_given;
 
     try {
-      await api.post(`/api/trainees/${id}/consent`, {
+      // The response is the updated profile, so no need to fetch it again
+      const updated = await api.post(`/api/trainees/${id}/consent`, {
         consent_given: newConsentStatus,
       });
       message.success(
         `Consent successfully ${newConsentStatus ? 'granted' : 'withdrawn'}`
       );
       setConsentModalVisible(false);
-      await fetchTrainee();
+      setTrainee(updated);
     } catch (err) {
       message.error(err?.detail || 'Failed to update consent');
     } finally {
@@ -388,6 +392,24 @@ export default function TraineeDetail() {
         }}
       >
         <Spin size="large" />
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div style={{ maxWidth: 600, margin: '60px auto' }}>
+        <Alert
+          type="error"
+          showIcon
+          message="Could not load this trainee"
+          description={loadError}
+          action={
+            <Button onClick={() => fetchTrainee()} type="primary">
+              Retry
+            </Button>
+          }
+        />
       </div>
     );
   }

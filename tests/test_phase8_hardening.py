@@ -314,8 +314,10 @@ def test_consent_is_required_and_never_assumed(isolated_db):
     trainee_id = make_trainee()
     profile = get_ok(admin, f"/api/trainees/{trainee_id}")
     assert profile["consent_given"] is True
-    for field in ("phone", "email", "dob"):
+    # Contact details stay on /contact; gender + date of birth are on the profile
+    for field in ("phone", "email"):
         assert field not in profile
+    assert profile["dob"] and profile["gender"]
 
 
 def test_withdrawn_consent_blocks_new_followups_and_contact(isolated_db):

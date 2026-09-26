@@ -246,14 +246,19 @@ class TraineeCreateResponse(BaseModel):
 
 class TraineePublic(BaseModel):
     """
-    Response of GET /api/trainees/{trainee_id}.
+    Response of GET /api/trainees/{trainee_id} (admin only).
 
-    Note what is NOT here: phone, email and date of birth are deliberately
-    left out so the read endpoint does not leak personal contact details.
+    Note what is NOT here: phone and email are deliberately left out so the
+    basic profile does not carry contact details; they come from the
+    separate GET /api/trainees/{trainee_id}/contact. Gender and date of
+    birth are included: staff need them on the profile, and to tell apart
+    possible duplicate registrations (same name + date of birth).
     """
 
     trainee_id: str
     full_name: str
+    gender: str
+    dob: date
     district: str
     current_location: Optional[str] = None
     preferred_contact: str

@@ -330,6 +330,8 @@ export default function Employers() {
                     ` ${remindSummary.skipped_no_contact} skipped (no employer contact).`}
                   {remindSummary.skipped_no_consent > 0 &&
                     ` ${remindSummary.skipped_no_consent} skipped (trainee withdrew consent).`}
+                  {remindSummary.skipped_superseded > 0 &&
+                    ` ${remindSummary.skipped_superseded} older request(s) skipped (replaced by a newer request for the same job).`}
                 </>
               }
             />

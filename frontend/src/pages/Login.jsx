@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, Form, Input, Button, Alert, Typography } from 'antd';
 import { motion } from 'framer-motion';
-import { login } from '../api/client';
+import { errorMessage as describeError, login } from '../api/client';
 
 const { Title, Text } = Typography;
 export default function Login() {
@@ -22,7 +22,8 @@ export default function Login() {
       await login(values.username, values.password);
       navigate('/dashboard');
     } catch (err) {
-      setErrorMessage(err.message || 'Login failed. Please check your credentials.');
+      // login() throws { status, detail }; there is no err.message to read
+      setErrorMessage(describeError(err, 'Login failed. Please check your credentials.'));
     } finally {
       setLoading(false);
     }

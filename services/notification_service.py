@@ -27,10 +27,11 @@ import logging
 import os
 import smtplib
 import urllib.request
+from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from email.message import EmailMessage
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from database.models import (
@@ -57,6 +58,24 @@ FOLLOWUP_LABELS = {
     "6_MONTH": "6-month",
     "12_MONTH": "12-month",
 }
+
+
+IN_BATCH = 1000  # values per IN (...) list
+
+
+def _in_batches(values):
+    values = list(values)
+    for i in range(0, len(values), IN_BATCH):
+        yield values[i : i + IN_BATCH]
+
+
+def _by_id(db: Session, model, ids) -> dict:
+    """pk -> row for the given primary keys, in a few batched queries (not one per row)."""
+    found = {}
+    for batch in _in_batches(set(ids)):
+        for row in db.query(model).filter(model.id.in_(batch)):
+            found[row.id] = row
+    return found
 
 
 def public_base_url() -> str:
@@ -284,23 +303,29 @@ def dispatch_due_followups(db: Session, today: date | None = None) -> dict:
         latest_per_training[followup.training_record_pk_id] = followup
     summary["skipped_superseded"] = len(due) - len(latest_per_training)
 
-    for followup in latest_per_training.values():
-        trainee = db.query(Trainee).filter(Trainee.id == followup.trainee_pk_id).one()
+    # Everything the loop reads, loaded up front in batches instead of
+    # three queries per follow-up (a backlog of due check-ins can be thousands).
+    targets = list(latest_per_training.values())
+    trainees = _by_id(db, Trainee, (f.trainee_pk_id for f in targets))
+    trainings = _by_id(db, TrainingRecord, (f.training_record_pk_id for f in targets))
+    recently_contacted = set()
+    for batch in _in_batches(f.id for f in targets):
+        for followup_pk_id, created_at in db.query(
+            Notification.followup_pk_id, Notification.created_at
+        ).filter(Notification.followup_pk_id.in_(batch), Notification.purpose == "FOLLOWUP_REQUEST"):
+            if created_at is None or _aware(created_at) >= resend_cutoff:
+                recently_contacted.add(followup_pk_id)
+
+    for followup in targets:
+        trainee = trainees[followup.trainee_pk_id]
         if not trainee.consent_given:
             summary["skipped_no_consent"] += 1
             continue
-        recent = [
-            n for n in db.query(Notification).filter(
-                Notification.followup_pk_id == followup.id,
-                Notification.purpose == "FOLLOWUP_REQUEST",
-            )
-            if n.created_at is None or _aware(n.created_at) >= resend_cutoff
-        ]
-        if recent:
+        if followup.id in recently_contacted:
             summary["skipped_recently_contacted"] += 1
             continue
 
-        training = db.query(TrainingRecord).filter(TrainingRecord.id == followup.training_record_pk_id).one()
+        training = trainings[followup.training_record_pk_id]
         channel, recipient = _channel_and_recipient(trainee)
         notification = Notification(
             notification_id=generate_notification_id(db),
@@ -331,31 +356,64 @@ def remind_pending_verifications(db: Session) -> dict:
     link. After EMPLOYER_MAX_REQUESTS requests with still no answer, mark
     it 'Unable to Verify' (employer unresponsive) so it is visible in the
     data rather than silently pending forever.
+
+    Only the latest verification of each employment counts: a new request
+    for the same job creates a new row, and older Pending attempts it
+    replaced are history (counted as skipped_superseded, left unchanged).
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=RESEND_AFTER_DAYS)
-    summary = {"reminded": 0, "marked_unresponsive": 0, "skipped_no_contact": 0, "skipped_no_consent": 0, "notification_ids": []}
+    summary = {
+        "reminded": 0,
+        "marked_unresponsive": 0,
+        "skipped_no_contact": 0,
+        "skipped_no_consent": 0,
+        "skipped_superseded": 0,
+        "notification_ids": [],
+    }
 
-    pending = db.query(EmployerVerification).filter(EmployerVerification.verification_status == "Pending").all()
+    is_pending = EmployerVerification.verification_status == "Pending"
+    latest_ids = (
+        db.query(func.max(EmployerVerification.id))
+        .group_by(EmployerVerification.employment_pk_id)
+        .scalar_subquery()
+    )
+    pending = (
+        db.query(EmployerVerification)
+        .filter(is_pending, EmployerVerification.id.in_(latest_ids))
+        .order_by(EmployerVerification.id)
+        .all()
+    )
+    summary["skipped_superseded"] = db.query(EmployerVerification).filter(is_pending).count() - len(pending)
+
+    # Everything the loop reads, loaded up front in batches instead of
+    # three queries per pending verification.
+    with_contact = [v for v in pending if (v.employer_contact or "").strip()]
+    trainees = _by_id(db, Trainee, (v.trainee_pk_id for v in with_contact))
+    employments = _by_id(db, EmploymentRecord, (v.employment_pk_id for v in with_contact))
+    # (trainee pk, recipient) -> created_at of each request sent, oldest first
+    sent_by_contact = defaultdict(list)
+    for batch in _in_batches(trainees):
+        for trainee_pk_id, recipient, created_at in (
+            db.query(Notification.trainee_pk_id, Notification.recipient, Notification.created_at)
+            .filter(
+                Notification.purpose == "EMPLOYER_VERIFICATION",
+                Notification.trainee_pk_id.in_(batch),
+            )
+            .order_by(Notification.id)
+        ):
+            sent_by_contact[(trainee_pk_id, recipient)].append(created_at)
+
     for verification in pending:
         contact = (verification.employer_contact or "").strip()
         if not contact:
             summary["skipped_no_contact"] += 1
             continue
-        trainee = db.query(Trainee).filter(Trainee.id == verification.trainee_pk_id).one()
+        trainee = trainees[verification.trainee_pk_id]
         if not trainee.consent_given:
             summary["skipped_no_consent"] += 1
             continue
-        sent = (
-            db.query(Notification)
-            .filter(
-                Notification.purpose == "EMPLOYER_VERIFICATION",
-                Notification.trainee_pk_id == verification.trainee_pk_id,
-                Notification.recipient == contact,
-            )
-            .order_by(Notification.id)
-            .all()
-        )
-        if not sent or _aware(sent[-1].created_at) > cutoff:
+        sent = sent_by_contact[(verification.trainee_pk_id, contact)]
+        if not sent or _aware(sent[-1]) > cutoff:
             continue
 
         if len(sent) >= EMPLOYER_MAX_REQUESTS:
@@ -366,7 +424,7 @@ def remind_pending_verifications(db: Session) -> dict:
             summary["marked_unresponsive"] += 1
             continue
 
-        employment = db.query(EmploymentRecord).filter(EmploymentRecord.id == verification.employment_pk_id).one()
+        employment = employments[verification.employment_pk_id]
         token = create_link_token(PURPOSE_EMPLOYER_VERIFY, verification.verification_id, LINK_VALID_DAYS)
         notification = Notification(
             notification_id=generate_notification_id(db),
@@ -381,7 +439,10 @@ def remind_pending_verifications(db: Session) -> dict:
         )
         deliver(notification, subject="Reminder: employment confirmation request")
         db.add(notification)
-        db.flush()
+        # A later pending verification for the same trainee + contact must
+        # see this request as just sent (and skip), as it did when this was
+        # re-queried from the database after a flush.
+        sent.append(datetime.now(timezone.utc))
         summary["reminded"] += 1
         summary["notification_ids"].append(notification.notification_id)
 

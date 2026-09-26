@@ -16,6 +16,7 @@ from database.models import (
     ApprenticeshipRecord,
     EmployerVerification,
     EmploymentRecord,
+    EmploymentStatusHistory,
     FollowUp,
     Outcome,
     SelfEmploymentRecord,
@@ -58,33 +59,61 @@ def build_record(db: Session, trainee: Trainee) -> dict:
     course_of = {t.id: t for t in trainings}
 
     jobs = []
-    for employment in db.query(EmploymentRecord).filter(EmploymentRecord.trainee_pk_id == trainee.id):
-        latest = (
-            db.query(EmployerVerification)
-            .filter(EmployerVerification.employment_pk_id == employment.id)
-            .order_by(EmployerVerification.id.desc())
-            .first()
-        )
+    employments = (
+        db.query(EmploymentRecord)
+        .filter(EmploymentRecord.trainee_pk_id == trainee.id)
+        .order_by(EmploymentRecord.joining_date, EmploymentRecord.id)
+        .all()
+    )
+    ids = [e.id for e in employments]
+    # Latest verification and latest status of every job, one query each (not one per job)
+    latest_verification, latest_status = {}, {}
+    if ids:
+        for employment_pk_id, verification_status in (
+            db.query(EmployerVerification.employment_pk_id, EmployerVerification.verification_status)
+            .filter(EmployerVerification.employment_pk_id.in_(ids))
+            .order_by(EmployerVerification.id)
+        ):
+            latest_verification[employment_pk_id] = verification_status  # ascending: last wins
+        # Current status = the latest status-history entry, as staff see it
+        # (employment_records.employment_status is only the status at the start)
+        for employment_pk_id, status_value in (
+            db.query(EmploymentStatusHistory.employment_pk_id, EmploymentStatusHistory.employment_status)
+            .filter(EmploymentStatusHistory.employment_pk_id.in_(ids))
+            .order_by(EmploymentStatusHistory.status_date, EmploymentStatusHistory.id)
+        ):
+            latest_status[employment_pk_id] = status_value  # ascending: last wins
+    for employment in employments:
         jobs.append(
             {
                 "type": "Employed",
                 "organisation": employment.company_name,
                 "role": employment.job_role,
                 "since": employment.joining_date,
-                "status": employment.employment_status,
-                "employer_confirmation": latest.verification_status if latest else None,
+                "status": latest_status.get(employment.id, employment.employment_status),
+                "employer_confirmation": latest_verification.get(employment.id),
             }
         )
-    for record in db.query(SelfEmploymentRecord).filter(SelfEmploymentRecord.trainee_pk_id == trainee.id):
+    for record in (
+        db.query(SelfEmploymentRecord)
+        .filter(SelfEmploymentRecord.trainee_pk_id == trainee.id)
+        .order_by(SelfEmploymentRecord.start_date, SelfEmploymentRecord.id)
+    ):
         jobs.append(
             {"type": "Self-employed", "organisation": record.business_name, "role": record.business_type,
              "since": record.start_date, "status": None, "employer_confirmation": None}
         )
-    for record in db.query(ApprenticeshipRecord).filter(ApprenticeshipRecord.trainee_pk_id == trainee.id):
+    for record in (
+        db.query(ApprenticeshipRecord)
+        .filter(ApprenticeshipRecord.trainee_pk_id == trainee.id)
+        .order_by(ApprenticeshipRecord.start_date, ApprenticeshipRecord.id)
+    ):
         jobs.append(
             {"type": "Apprenticeship", "organisation": record.organization_name, "role": record.role,
              "since": record.start_date, "status": None, "employer_confirmation": None}
         )
+    # Work history in date order (a stable sort keeps same-day jobs in the order above)
+    jobs.sort(key=lambda job: job["since"])
 
     consent_history = (
         db.query(TraineeConsentHistory)

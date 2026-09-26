@@ -52,10 +52,12 @@ def test_register_and_fetch_trainee():
 
     profile = fetched.json()
     assert profile["district"] == "Pune"
-    # The read endpoint must not leak contact details
+    # Gender and date of birth entered at registration come back on the profile
+    assert profile["gender"] == "Female"
+    assert profile["dob"] == "2003-01-20"
+    # Contact details stay on the separate /contact endpoint
     assert "phone" not in profile
     assert "email" not in profile
-    assert "dob" not in profile
 
 
 def test_registration_rejected_without_consent():
