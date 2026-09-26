@@ -47,7 +47,7 @@ const CARDS_CONFIG = [
     icon: <BarChartOutlined style={{ fontSize: 30, color: '#722ed1' }} />,
     roles: ['admin', 'analyst'],
     path: '/analytics',
-    available: false,
+    available: true,
   },
 ];
 

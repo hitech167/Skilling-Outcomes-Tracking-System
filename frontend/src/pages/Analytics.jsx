@@ -328,13 +328,13 @@ export default function Analytics() {
       <motion.div variants={containerVariants} initial="hidden" animate="visible">
         {/* Summary rate cards */}
         <Row gutter={[24, 24]} style={{ marginBottom: 24 }}>
-          {rateCards.map((card) => (
-            <Col xs={24} sm={12} lg={6} key={card.key}>
+          {rateCards.map(({ key, ...cardProps }) => (
+            <Col xs={24} sm={12} lg={6} key={key}>
               <motion.div variants={itemVariants} style={{ height: '100%' }}>
                 <RateCard
-                  {...card}
+                  {...cardProps}
                   loading={loading}
-                  error={errors[card.key]}
+                  error={errors[key]}
                 />
               </motion.div>
             </Col>
