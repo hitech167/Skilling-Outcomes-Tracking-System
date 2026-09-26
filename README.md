@@ -33,6 +33,9 @@ copy .env.example .env         # macOS/Linux: cp .env.example .env
 Fill in `DATABASE_URL`, `JWT_SECRET_KEY` (32+ random characters) and the
 admin/analyst credentials. `.env` is git-ignored — never commit it.
 
+**Frontend:** set `CORS_ORIGINS` in `.env` to the frontend's address(es),
+e.g. `http://localhost:5173`. Unset, the local dev ports 3000 and 5173 are allowed.
+
 ## 3. Run
 
 ```bash
@@ -62,7 +65,19 @@ protected endpoints).
 ## 5. Privacy & consent
 
 - `trainee_id` (TRN000001…) is the permanent identity; phone/location can be
-  changed with `PATCH /api/trainees/{id}` without breaking history.
+  changed with `PATCH /api/trainees/{id}` without breaking history. Trainees
+  can also change their own phone / location without a login, using the
+  **profile link** they get at registration (`/my-profile/{token}`, valid ~18
+  months, re-sent on request with `POST /api/request-link`) or any follow-up
+  link. A new phone number is only saved after the trainee enters a 6-digit
+  code sent to that new number. Every change is
+  kept in `trainee_contact_history` (`GET /api/trainees/{id}/contact-history`).
+- Consent is audited: every grant / withdrawal is logged in
+  `trainee_consent_history` (source `registration` / `admin` / `self`, method
+  such as *Paper form*, and who recorded it) - `GET /api/trainees/{id}/consent-history`.
+  Staff can record `consent_method` / `consent_recorded_by` at registration, and a
+  trainee can withdraw or re-grant their own consent from their link
+  (`POST /api/self-report/{token}/consent`, no login).
 - Registration requires `consent_given: true`; an explicit `false` for
   `consent_analytics` / `consent_privacy_notice` is refused, never ignored.
 - `POST /api/trainees/{id}/consent` withdraws or re-grants consent. With
@@ -109,8 +124,24 @@ or rejects the employment, with current status and salary. That marks it
 *Verified* or *Rejected* via *Employer Portal* and records an
 *Employer, Verified* wage.
 
-All links are signed, expire after 30 days, work once only, and can never be
-used as a login.
+`POST /api/verifications/remind-pending` re-sends the link to employers who
+have not answered for 7 days. After 3 requests with no answer the
+verification becomes *Unable to Verify* ("Employer unresponsive"). It only
+runs when called, so schedule it (cron) if you want it automatic.
+
+All links are signed, expire after 30 days, and can never be used as a login.
+Follow-up and verification submissions work once only; the contact-update
+route can be used repeatedly until the link expires.
+
+**External employment signals:** `POST /api/employment-signals/import` (admin,
+multipart CSV + `source`, optional `dry_run`) loads placements from an outside
+source such as an EPFO/ESIC extract or a job-portal export. Columns:
+`trainee_id` | `phone` | `external_id` (`TYPE:VALUE`), `employer_name`,
+`start_date` (YYYY-MM-DD), optional `job_role`, `monthly_salary`, `reference`.
+Matched, consenting trainees get an Employed outcome, employment record, wage
+point and an employer verification marked *Verified* by *Document*. Existing
+employers are never duplicated (a Pending verification is just resolved), and a
+bad row is reported without failing the file.
 
 ## 7. Cross-programme identity
 

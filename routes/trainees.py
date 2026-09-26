@@ -9,7 +9,6 @@ POST  /api/trainees/{id}/consent  -> withdraw or re-grant consent
 """
 
 import logging
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import text
@@ -17,8 +16,8 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from database.connection import get_db
-from database.models import Trainee
-from services import identity_service
+from database.models import Trainee, TraineeConsentHistory, TraineeContactHistory
+from services import consent_service, contact_service, identity_service, notification_service
 from schemas.trainee import (
     ConsentUpdate,
     TraineeContact,
@@ -95,11 +94,13 @@ def register_trainee(payload: TraineeCreate, db: Session = Depends(get_db)):
             phone=payload.phone,
             email=str(payload.email) if payload.email else None,
             preferred_contact=payload.preferred_contact,
-            consent_given=payload.consent_given,
-            consent_date=datetime.now(timezone.utc),
         )
         db.add(trainee)
         db.flush()
+        consent_service.set_consent(
+            db, trainee, payload.consent_given, source="registration",
+            method=payload.consent_method, recorded_by=payload.consent_recorded_by,
+        )
         for ext in payload.external_ids:
             identity_service.link_external_id(
                 db, trainee, ext.id_type, ext.id_value, ext.source_programme
@@ -127,8 +128,19 @@ def register_trainee(payload: TraineeCreate, db: Session = Depends(get_db)):
     # Safe to log: the ID carries no personal information
     logger.info("Registered trainee %s", trainee.trainee_id)
 
+    # Welcome message with the trainee's personal profile link. A delivery
+    # problem must never undo a registration that is already saved.
+    try:
+        notification_service.send_profile_link(db, trainee, welcome=True)
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("Could not record the welcome message for %s", trainee.trainee_id)
+
     return TraineeCreateResponse(
-        trainee_id=trainee.trainee_id, possible_duplicates=possible_duplicates
+        trainee_id=trainee.trainee_id,
+        possible_duplicates=possible_duplicates,
+        profile_link=notification_service.profile_link(trainee),
     )
 
 
@@ -211,24 +223,11 @@ def update_trainee_contact(
 ):
     trainee = _get_trainee_or_404(trainee_id, db)
     updates = payload.model_dump(exclude_unset=True)
-
-    # phone, district and preferred_contact are required columns: an
-    # explicit null is not allowed to wipe them.
-    for field in ("phone", "district", "preferred_contact"):
-        if field in updates and updates[field] is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"{field} cannot be empty",
-            )
-
-    if "email" in updates and updates["email"] is not None:
-        updates["email"] = str(updates["email"])
-    for field, value in updates.items():
-        setattr(trainee, field, value)
+    changed = contact_service.apply_contact_update(db, trainee, updates, source="admin")
 
     _commit(db, "updating trainee contact details")
     db.refresh(trainee)
-    logger.info("Updated contact details for %s (%s)", trainee.trainee_id, ", ".join(updates))
+    logger.info("Updated contact details for %s (%s)", trainee.trainee_id, ", ".join(changed))
     return trainee
 
 
@@ -246,9 +245,73 @@ def update_consent(trainee_id: str, payload: ConsentUpdate, db: Session = Depend
     consent_date records when the current consent state was set.
     """
     trainee = _get_trainee_or_404(trainee_id, db)
-    trainee.consent_given = payload.consent_given
-    trainee.consent_date = datetime.now(timezone.utc)
+    consent_service.set_consent(
+        db, trainee, payload.consent_given, source="admin",
+        method=payload.method, recorded_by=payload.recorded_by, notes=payload.notes,
+    )
     _commit(db, "updating trainee consent")
     db.refresh(trainee)
     logger.info("Consent for %s set to %s", trainee.trainee_id, trainee.consent_given)
     return trainee
+
+
+@router.get(
+    "/{trainee_id}/contact-history",
+    summary="Previous phone / email / district values, newest first",
+)
+def contact_history(trainee_id: str, db: Session = Depends(get_db)):
+    trainee = _get_trainee_or_404(trainee_id, db)
+    rows = (
+        db.query(TraineeContactHistory)
+        .filter(TraineeContactHistory.trainee_pk_id == trainee.id)
+        .order_by(TraineeContactHistory.id.desc())
+        .all()
+    )
+    return [
+        {
+            "field": r.field,
+            "old_value": r.old_value,
+            "new_value": r.new_value,
+            "source": r.source,
+            "changed_at": r.changed_at,
+        }
+        for r in rows
+    ]
+
+
+@router.get(
+    "/{trainee_id}/consent-history",
+    summary="Every consent grant / withdrawal with who recorded it and how, newest first",
+)
+def consent_history(trainee_id: str, db: Session = Depends(get_db)):
+    trainee = _get_trainee_or_404(trainee_id, db)
+    rows = (
+        db.query(TraineeConsentHistory)
+        .filter(TraineeConsentHistory.trainee_pk_id == trainee.id)
+        .order_by(TraineeConsentHistory.id.desc())
+        .all()
+    )
+    return [
+        {
+            "consent_given": r.consent_given,
+            "source": r.source,
+            "method": r.method,
+            "recorded_by": r.recorded_by,
+            "notes": r.notes,
+            "changed_at": r.changed_at,
+        }
+        for r in rows
+    ]
+
+
+@router.get(
+    "/{trainee_id}/profile-link",
+    summary="The trainee's personal profile link, to give them in person",
+)
+def get_profile_link(trainee_id: str, db: Session = Depends(get_db)):
+    trainee = _get_trainee_or_404(trainee_id, db)
+    return {
+        "trainee_id": trainee.trainee_id,
+        "link": notification_service.profile_link(trainee),
+        "valid_days": notification_service.PROFILE_LINK_DAYS,
+    }

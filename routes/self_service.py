@@ -42,7 +42,8 @@ from schemas.self_service import (
     VerificationRequestCreate,
     VerificationRequestResponse,
 )
-from services import notification_service, self_service
+from schemas.trainee import PhoneVerifyRequest, SelfConsentUpdate, TraineeContactUpdate
+from services import consent_service, contact_service, notification_service, self_service
 from services.auth import (
     PURPOSE_EMPLOYER_VERIFY,
     PURPOSE_SELF_REPORT,
@@ -79,6 +80,44 @@ def self_report_submit(token: str, payload: SelfReportSubmission, db: Session = 
     self_service.submit_self_report(db, followup_id, payload)
     logger.info("Self-report recorded for follow-up %s", followup_id)
     return SelfReportResult()
+
+
+@public_router.get("/api/self-report/{token}/contact", summary="Trainee's current location and contact preference")
+def self_contact_context(token: str, db: Session = Depends(get_db)):
+    followup_id = read_link_token(token, PURPOSE_SELF_REPORT)
+    _, trainee, _ = self_service.load_followup_context(db, followup_id)
+    return {
+        "first_name": trainee.full_name.split()[0],
+        "district": trainee.district,
+        "current_location": trainee.current_location,
+        "preferred_contact": trainee.preferred_contact,
+    }
+
+
+@public_router.patch("/api/self-report/{token}/contact", summary="Trainee updates their own contact details (a new phone needs a code)")
+def self_contact_update(token: str, payload: TraineeContactUpdate, db: Session = Depends(get_db)):
+    followup_id = read_link_token(token, PURPOSE_SELF_REPORT)
+    _, trainee, _ = self_service.load_followup_context(db, followup_id)
+    result = contact_service.self_update(db, trainee, payload.model_dump(exclude_unset=True))
+    logger.info("Trainee %s updated own contact details", trainee.trainee_id)
+    return result
+
+
+@public_router.post("/api/self-report/{token}/contact/verify", summary="Confirm a new phone number with the code sent to it")
+def self_contact_verify(token: str, payload: PhoneVerifyRequest, db: Session = Depends(get_db)):
+    followup_id = read_link_token(token, PURPOSE_SELF_REPORT)
+    _, trainee, _ = self_service.load_followup_context(db, followup_id)
+    return contact_service.verify_phone_change(db, trainee, payload.code)
+
+
+@public_router.post("/api/self-report/{token}/consent", summary="Trainee withdraws or re-grants their own consent")
+def self_consent_update(token: str, payload: SelfConsentUpdate, db: Session = Depends(get_db)):
+    followup_id = read_link_token(token, PURPOSE_SELF_REPORT)
+    _, trainee, _ = self_service.load_followup_context(db, followup_id)
+    consent_service.set_consent(db, trainee, payload.consent_given, source="self", method="Self-service")
+    db.commit()
+    logger.info("Trainee %s set own consent to %s", trainee.trainee_id, payload.consent_given)
+    return {"consent_given": trainee.consent_given}
 
 
 # =====================================================================
@@ -119,6 +158,14 @@ def employer_verify_submit(token: str, payload: EmployerVerifySubmission, db: Se
 )
 def dispatch_due_followups(db: Session = Depends(get_db)):
     return notification_service.dispatch_due_followups(db)
+
+
+@admin_router.post(
+    "/api/verifications/remind-pending",
+    summary="Re-send employer confirmation links; mark employers unresponsive after repeated silence",
+)
+def remind_pending_verifications(db: Session = Depends(get_db)):
+    return notification_service.remind_pending_verifications(db)
 
 
 @admin_router.get(
@@ -208,10 +255,13 @@ def _notification_item(n: Notification, db: Session) -> NotificationItem:
 )
 def list_notifications(
     status_filter: Optional[str] = Query(None, alias="status"),
+    purpose: Optional[str] = Query(None, description="e.g. FOLLOWUP_REQUEST, EMPLOYER_VERIFICATION, PROFILE_LINK, PHONE_VERIFICATION"),
     limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
 ):
     query = db.query(Notification)
+    if purpose:
+        query = query.filter(Notification.purpose == purpose.strip().upper())
     if status_filter:
         query = query.filter(Notification.status == status_filter.strip().capitalize())
     rows = query.order_by(Notification.id.desc()).limit(limit).all()
