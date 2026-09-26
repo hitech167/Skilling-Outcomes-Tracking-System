@@ -98,6 +98,11 @@ class WageHistoryResponse(BaseModel):
     verification_status: str
     notes: Optional[str] = None
 
+    # Joined from the trainee / employment record (list endpoint only)
+    trainee_name: Optional[str] = None
+    company_name: Optional[str] = None
+    job_role: Optional[str] = None
+
     model_config = {"from_attributes": True}
 
 

@@ -377,9 +377,9 @@ export default function Analytics() {
                     <Statistic
                       title="Avg. salary change"
                       value={formatSalary(salaryChange)}
-                      valueStyle={
+                      styles={
                         salaryChange !== null && salaryChange !== undefined
-                          ? { color: growthUp ? '#3f8600' : '#cf1322' }
+                          ? { content: { color: growthUp ? '#3f8600' : '#cf1322' } }
                           : undefined
                       }
                       prefix={

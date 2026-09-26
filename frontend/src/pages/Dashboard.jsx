@@ -9,6 +9,7 @@ import {
   UploadOutlined,
   BulbOutlined,
   IdcardOutlined,
+  LineChartOutlined,
 } from '@ant-design/icons';
 import { motion } from 'framer-motion';
 import { getMe, logout } from '../api/client';
@@ -41,6 +42,15 @@ const CARDS_CONFIG = [
     icon: <BankOutlined style={{ fontSize: 30, color: '#fa8c16' }} />,
     roles: ['admin'],
     path: '/employers',
+    available: true,
+  },
+  {
+    key: 'wage-history',
+    title: 'Wage History',
+    description: 'Track salary records and wage progression across trainees and employers.',
+    icon: <LineChartOutlined style={{ fontSize: 30, color: '#389e0d' }} />,
+    roles: ['admin'],
+    path: '/wage-history',
     available: true,
   },
   {

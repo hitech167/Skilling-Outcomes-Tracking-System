@@ -2,6 +2,7 @@
 Wage history routes — Phase 4.
 
 POST /api/wage-history                          -> add a wage record
+GET  /api/wage-history                          -> list wage records across trainees, newest first
 GET  /api/employment/{employment_id}/wage-history -> list wage history, oldest first
 
 The original salary on employment_records is never overwritten; every
@@ -10,16 +11,19 @@ later without any ML classification (per PROJECT_LOG's Phase 4 spec).
 """
 
 import logging
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from database.connection import get_db
-from database.models import WageHistory
+from database.models import EmploymentRecord, Trainee, WageHistory
 from routes._shared import get_employment_or_404, get_trainee_or_404
 from schemas.wage_history import (
+    ALLOWED_WAGE_SOURCES,
+    ALLOWED_WAGE_VERIFICATION_STATUSES,
     WageHistoryCreate,
     WageHistoryListResponse,
     WageHistoryResponse,
@@ -104,13 +108,67 @@ def create_wage_record(payload: WageHistoryCreate, db: Session = Depends(get_db)
 
 
 @router.get(
+    "/api/wage-history",
+    response_model=list[WageHistoryResponse],
+    summary="List wage records across trainees, newest effective date first",
+)
+def list_all_wage_history(
+    source: Optional[str] = Query(None, description="Trainee | Employer | Document | Admin"),
+    verification_status: Optional[str] = Query(None, description="Unverified | Verified"),
+    trainee_id: Optional[str] = Query(None),
+    limit: int = Query(500, ge=1, le=2000),
+    db: Session = Depends(get_db),
+):
+    query = (
+        db.query(WageHistory, EmploymentRecord, Trainee)
+        .join(EmploymentRecord, EmploymentRecord.id == WageHistory.employment_pk_id)
+        .join(Trainee, Trainee.id == WageHistory.trainee_pk_id)
+    )
+    if source:
+        cleaned = source.strip().capitalize()
+        if cleaned not in ALLOWED_WAGE_SOURCES:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"source must be one of: {', '.join(sorted(ALLOWED_WAGE_SOURCES))}",
+            )
+        query = query.filter(WageHistory.source == cleaned)
+    if verification_status:
+        cleaned = verification_status.strip().capitalize()
+        if cleaned not in ALLOWED_WAGE_VERIFICATION_STATUSES:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "verification_status must be one of: "
+                    f"{', '.join(sorted(ALLOWED_WAGE_VERIFICATION_STATUSES))}"
+                ),
+            )
+        query = query.filter(WageHistory.verification_status == cleaned)
+    if trainee_id:
+        query = query.filter(Trainee.trainee_id == trainee_id.strip().upper())
+
+    rows = (
+        query.order_by(WageHistory.effective_date.desc(), WageHistory.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        to_response(record, employment.employment_id, trainee.trainee_id).model_copy(
+            update={
+                "trainee_name": trainee.full_name,
+                "company_name": employment.company_name,
+                "job_role": employment.job_role,
+            }
+        )
+        for record, employment, trainee in rows
+    ]
+
+
+@router.get(
     "/api/employment/{employment_id}/wage-history",
     response_model=WageHistoryListResponse,
     summary="List wage history for an employment, oldest first",
 )
 def list_wage_history(employment_id: str, db: Session = Depends(get_db)):
-    from database.models import Trainee
-
     employment = get_employment_or_404(employment_id, db)
     trainee = db.query(Trainee).filter(Trainee.id == employment.trainee_pk_id).first()
 

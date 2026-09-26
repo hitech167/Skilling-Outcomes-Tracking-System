@@ -12,6 +12,7 @@ import {
   BarChartOutlined,
   BulbOutlined,
   IdcardOutlined,
+  LineChartOutlined,
   LogoutOutlined,
   UserOutlined,
   MenuUnfoldOutlined,
@@ -52,6 +53,11 @@ const MENU_ITEMS = [
     key: '/employers',
     icon: <BankOutlined />,
     label: <Link to="/employers">Employers</Link>,
+  },
+  {
+    key: '/wage-history',
+    icon: <LineChartOutlined />,
+    label: <Link to="/wage-history">Wage history</Link>,
   },
   {
     key: '/import-placements',
