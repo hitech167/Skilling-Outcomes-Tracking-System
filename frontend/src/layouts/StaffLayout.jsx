@@ -11,6 +11,7 @@ import {
   UploadOutlined,
   BarChartOutlined,
   BulbOutlined,
+  IdcardOutlined,
   LogoutOutlined,
   UserOutlined,
   MenuUnfoldOutlined,
@@ -56,6 +57,11 @@ const MENU_ITEMS = [
     key: '/import-placements',
     icon: <UploadOutlined />,
     label: <Link to="/import-placements">Import placements</Link>,
+  },
+  {
+    key: '/identity',
+    icon: <IdcardOutlined />,
+    label: <Link to="/identity">Identity</Link>,
   },
   {
     key: '/analytics',

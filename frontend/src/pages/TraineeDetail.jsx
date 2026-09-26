@@ -31,6 +31,7 @@ import {
   InfoCircleOutlined,
 } from '@ant-design/icons';
 import { api } from '../api/client';
+import ExternalIds from '../components/ExternalIds';
 
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
@@ -662,6 +663,11 @@ export default function TraineeDetail() {
           </Descriptions.Item>
         </Descriptions>
       ) : null,
+    },
+    {
+      key: 'external-ids',
+      label: 'External IDs',
+      children: <ExternalIds traineeId={trainee.trainee_id} />,
     },
   ];
 

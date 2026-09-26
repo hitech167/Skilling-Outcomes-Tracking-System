@@ -333,6 +333,8 @@ def test_external_ids_link_programmes_and_block_duplicates(isolated_db):
     # Aadhaar must never be stored
     for bad in ({"id_type": "Aadhaar", "id_value": "X1"}, {"id_type": "Scheme ID", "id_value": "1234 5678 9012"}):
         assert admin.post(f"/api/trainees/{other}/external-ids", json=bad).status_code == 422
+        lookup = admin.get("/api/identity/lookup", params=bad)
+        assert lookup.status_code == 422 and "Aadhaar" in lookup.json()["detail"]
 
 
 def test_possible_duplicates_are_flagged_not_merged(isolated_db):

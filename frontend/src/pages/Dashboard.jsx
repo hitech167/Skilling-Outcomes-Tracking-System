@@ -8,6 +8,7 @@ import {
   BarChartOutlined,
   UploadOutlined,
   BulbOutlined,
+  IdcardOutlined,
 } from '@ant-design/icons';
 import { motion } from 'framer-motion';
 import { getMe, logout } from '../api/client';
@@ -67,6 +68,15 @@ const CARDS_CONFIG = [
     icon: <UploadOutlined style={{ fontSize: 30, color: '#13c2c2' }} />,
     roles: ['admin'],
     path: '/import-placements',
+    available: true,
+  },
+  {
+    key: 'identity',
+    title: 'Identity',
+    description: 'Look up trainees by programme IDs and review possible duplicate records.',
+    icon: <IdcardOutlined style={{ fontSize: 30, color: '#2f54eb' }} />,
+    roles: ['admin'],
+    path: '/identity',
     available: true,
   },
 ];

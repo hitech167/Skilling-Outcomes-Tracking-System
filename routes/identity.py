@@ -10,6 +10,7 @@ GET  /api/identity/possible-duplicates         -> same name + DOB registered mor
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -92,7 +93,14 @@ def lookup_external_id(
     id_value: str = Query(..., min_length=1),
     db: Session = Depends(get_db),
 ):
-    clean = ExternalIdCreate(id_type=id_type, id_value=id_value)
+    try:
+        clean = ExternalIdCreate(id_type=id_type, id_value=id_value)
+    except ValidationError as exc:
+        # e.g. an Aadhaar-like value: a client error, not a 500
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="; ".join(err["msg"].removeprefix("Value error, ") for err in exc.errors()),
+        )
     owner = identity_service.existing_owner(db, clean.id_type, clean.id_value)
     if owner is None:
         raise HTTPException(
