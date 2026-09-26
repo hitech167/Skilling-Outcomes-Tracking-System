@@ -20,27 +20,31 @@ Nothing here writes to the database. No new tables/models/sequences.
 
 from collections import defaultdict
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from database.models import (
     EmployerVerification,
     EmploymentRecord,
-    EmploymentStatusHistory,
     FollowUp,
     FollowUpOutcomeUpdate,
-    NonPlacementRecord,
     Outcome,
     Trainee,
     TrainingRecord,
-    WageHistory,
 )
 from services import analytics_service, identity_service
 from services.analytics_service import (
     ATTRITION_STATUSES,
+    _all_training_rows,
     _avg,
+    _cached,
+    _employment_rows,
+    _followup_update_rows,
     _latest_employment_status_rows,
+    _latest_outcome_by_training,
     _pct,
     _resolve_latest_status,
+    _wages_by_employment,
     wage_progression_for,
 )
 
@@ -53,7 +57,7 @@ FOLLOWUP_TYPES = ("30_DAY", "90_DAY", "6_MONTH", "12_MONTH")
 
 
 def get_skill_gaps_overview(db: Session) -> dict:
-    updates = db.query(FollowUpOutcomeUpdate).all()
+    updates = _followup_update_rows(db)
     total = len(updates)
     skill_gap = sum(1 for u in updates if u.skill_gap is True)
     additional_training = sum(1 for u in updates if u.additional_training_needed is True)
@@ -75,19 +79,27 @@ def get_skill_gaps_overview(db: Session) -> dict:
 
 
 def _followup_update_rows_with_group(db: Session):
-    """(FollowUpOutcomeUpdate, course_name, provider_name) for every recorded update."""
-    return (
-        db.query(FollowUpOutcomeUpdate, TrainingRecord.course_name, TrainingRecord.provider_name)
+    """Every recorded follow-up update's answers with its training's course_name / provider_name."""
+    return _cached(
+        db,
+        "followup_update_rows_with_group",
+        lambda: db.query(
+            FollowUpOutcomeUpdate.skill_gap,
+            FollowUpOutcomeUpdate.additional_training_needed,
+            FollowUpOutcomeUpdate.training_relevance,
+            TrainingRecord.course_name,
+            TrainingRecord.provider_name,
+        )
         .join(FollowUp, FollowUpOutcomeUpdate.followup_pk_id == FollowUp.id)
         .join(TrainingRecord, FollowUp.training_record_pk_id == TrainingRecord.id)
-        .all()
+        .all(),
     )
 
 
 def _group_followup_stats(rows, key_is_course: bool) -> dict:
     groups = defaultdict(lambda: {"total": 0, "skill_gap": 0, "additional_training": 0, "relevance": []})
-    for update, course_name, provider_name in rows:
-        key = course_name if key_is_course else provider_name
+    for update in rows:
+        key = update.course_name if key_is_course else update.provider_name
         bucket = groups[key]
         bucket["total"] += 1
         if update.skill_gap is True:
@@ -131,7 +143,7 @@ def get_skill_gaps_by_course(db: Session) -> list:
 
 def get_non_placement_analysis(db: Session) -> dict:
     reasons = analytics_service.get_non_placement_reasons(db)
-    total = db.query(NonPlacementRecord).count()
+    total = sum(r["count"] for r in reasons)
     most_frequent = reasons[0]["reason"] if reasons else None
     return {"total_records": total, "reasons": reasons, "most_frequent_reason": most_frequent}
 
@@ -188,7 +200,7 @@ def get_training_relevance_insights(db: Session) -> dict:
 
 
 def get_additional_training_overview(db: Session) -> dict:
-    updates = db.query(FollowUpOutcomeUpdate).all()
+    updates = _followup_update_rows(db)
     total = len(updates)
     needed = sum(1 for u in updates if u.additional_training_needed is True)
     return {
@@ -212,12 +224,14 @@ def get_longitudinal_outcomes(db: Session) -> dict:
     training_completed = (
         db.query(TrainingRecord).filter(TrainingRecord.status == "Completed").count()
     )
-    followup_counts = {
-        ftype: db.query(FollowUp)
-        .filter(FollowUp.followup_type == ftype, FollowUp.status == "Completed")
-        .count()
-        for ftype in FOLLOWUP_TYPES
-    }
+    # One grouped query instead of one count per follow-up type
+    completed_by_type = dict(
+        db.query(FollowUp.followup_type, func.count(FollowUp.id))
+        .filter(FollowUp.status == "Completed")
+        .group_by(FollowUp.followup_type)
+        .all()
+    )
+    followup_counts = {ftype: completed_by_type.get(ftype, 0) for ftype in FOLLOWUP_TYPES}
     retention = analytics_service.get_retention_rate(db)
     employed_trainees = retention["employed_trainees"]
 
@@ -404,24 +418,29 @@ def get_resource_allocation(db: Session) -> list:
 
 
 def _employment_rows_with_group(db: Session):
-    """(EmploymentRecord, course_name, provider_name) for every employment record."""
-    return (
-        db.query(EmploymentRecord, TrainingRecord.course_name, TrainingRecord.provider_name)
+    """Every employment record (id + status) with its training's course_name / provider_name."""
+    return _cached(
+        db,
+        "employment_rows_with_group",
+        lambda: db.query(
+            EmploymentRecord.id,
+            EmploymentRecord.employment_status,
+            TrainingRecord.course_name,
+            TrainingRecord.provider_name,
+        )
         .join(Outcome, EmploymentRecord.outcome_pk_id == Outcome.id)
         .join(TrainingRecord, Outcome.training_record_pk_id == TrainingRecord.id)
-        .all()
+        .all(),
     )
 
 
 def _group_employment_stats(db: Session, rows, key_is_course: bool) -> dict:
     latest_rows = _latest_employment_status_rows(db)
-    wage_by_employment = defaultdict(list)
-    for w in db.query(WageHistory).all():
-        wage_by_employment[w.employment_pk_id].append(w)
+    wage_by_employment = _wages_by_employment(db)
 
     groups = defaultdict(lambda: {"total": 0, "active": 0, "attrition": 0, "growth": []})
-    for emp, course_name, provider_name in rows:
-        key = course_name if key_is_course else provider_name
+    for emp in rows:
+        key = emp.course_name if key_is_course else emp.provider_name
         bucket = groups[key]
         bucket["total"] += 1
         status = _resolve_latest_status(emp, latest_rows)
@@ -493,10 +512,17 @@ def _blank(value) -> bool:
 
 
 def get_data_quality(db: Session) -> dict:
-    trainees = db.query(Trainee).all()
-    trainings = db.query(TrainingRecord).all()
-    employments = db.query(EmploymentRecord).all()
-    followups = db.query(FollowUp).all()
+    trainees = db.query(
+        Trainee.id,
+        Trainee.trainee_id,
+        Trainee.full_name,
+        Trainee.phone,
+        Trainee.current_location,
+        Trainee.gender,
+        Trainee.dob,
+    ).all()
+    trainings = [tr for tr, _outcome, _trainee in _all_training_rows(db)]
+    employments = _employment_rows(db)
 
     trainees_missing_phone = sum(1 for t in trainees if _blank(t.phone))
     trainees_missing_location = sum(1 for t in trainees if _blank(t.current_location))
@@ -512,14 +538,13 @@ def get_data_quality(db: Session) -> dict:
     employment_missing_joining_date = sum(1 for e in employments if e.joining_date is None)
 
     # Longitudinal gaps: records that exist but whose follow-on evidence doesn't yet.
-    with_wage = {pk for (pk,) in db.query(WageHistory.employment_pk_id).distinct()}
+    # Wage / status / outcome sets come from loaders the other figures already use.
+    with_wage = set(_wages_by_employment(db))
     with_verification = {
         pk for (pk,) in db.query(EmployerVerification.employment_pk_id).distinct()
     }
-    with_status = {
-        pk for (pk,) in db.query(EmploymentStatusHistory.employment_pk_id).distinct()
-    }
-    with_outcome = {pk for (pk,) in db.query(Outcome.training_record_pk_id).distinct()}
+    with_status = set(_latest_employment_status_rows(db))
+    with_outcome = set(_latest_outcome_by_training(db))
 
     # Counted outside the consent scope on purpose: it reports how many
     # trainees the other figures EXCLUDE (a count only, no identities).
@@ -529,12 +554,19 @@ def get_data_quality(db: Session) -> dict:
         .filter(Trainee.consent_given.is_(False))
         .count()
     )
-    duplicate_trainees = sum(len(g["trainee_ids"]) for g in identity_service.duplicate_groups(db))
+    # Reuses the trainee rows loaded above instead of reading the table again
+    duplicate_trainees = sum(
+        len(g["trainee_ids"]) for g in identity_service.group_duplicates(trainees)
+    )
 
-    followups_not_completed = sum(1 for f in followups if f.status != "Completed")
-    followups_not_reachable = sum(1 for f in followups if f.status == "Not Reachable")
-    total_followups = len(followups)
-    completed_followups = total_followups - followups_not_completed
+    # Follow-ups are only counted, so count them in the database
+    followups_by_status = dict(
+        db.query(FollowUp.status, func.count(FollowUp.id)).group_by(FollowUp.status).all()
+    )
+    total_followups = sum(followups_by_status.values())
+    completed_followups = followups_by_status.get("Completed", 0)
+    followups_not_completed = total_followups - completed_followups
+    followups_not_reachable = followups_by_status.get("Not Reachable", 0)
 
     return {
         "trainees_missing_phone": trainees_missing_phone,

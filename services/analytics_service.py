@@ -44,9 +44,10 @@ function):
   the eligible count so they can be read correctly.
 """
 
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, namedtuple
 from datetime import date
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from database.models import (
@@ -132,55 +133,93 @@ def wage_progression_for(entries: list) -> dict | None:
 
 # ---------------------------------------------------------------------
 # Shared loaders
+#
+# Performance notes (the database is usually remote, so every query is a
+# network round trip and every column is bytes on the wire):
+#  - Loaders select only the columns the calculations use, not whole ORM
+#    objects. The rows still support attribute access (row.outcome_type),
+#    so the calculation code reads the same.
+#  - One endpoint typically needs the same base data several times (the
+#    summary reuses placement, retention, attrition, ...). _cached keeps
+#    each loader's result on the session, which lives for one request and
+#    is only used by these read-only endpoints, so it is never stale.
+#  - The consent scope (services/consent_scope.py) still applies: it
+#    filters every ORM SELECT on these models, column-only ones included.
 # ---------------------------------------------------------------------
+
+_CACHE_KEY = "analytics_cache"
+
+# The trainee side of a training row: all the breakdowns need is district.
+TraineeRef = namedtuple("TraineeRef", "id district")
+
+
+def _cached(db: Session, key: str, loader):
+    """Run `loader()` once per session (= once per request) and reuse the result."""
+    cache = db.info.setdefault(_CACHE_KEY, {})
+    if key not in cache:
+        cache[key] = loader()
+    return cache[key]
 
 
 def _latest_outcome_by_training(db: Session) -> dict:
-    """training_record_pk_id -> its most recent Outcome (by status_date, then id)."""
-    latest: dict = {}
-    for outcome in db.query(Outcome).order_by(
-        Outcome.training_record_pk_id, Outcome.status_date.asc(), Outcome.id.asc()
-    ):
-        latest[outcome.training_record_pk_id] = outcome
-    return latest
+    """training_record_pk_id -> its most recent outcome row (by status_date, then id)."""
+
+    def load():
+        latest: dict = {}
+        for outcome in db.query(
+            Outcome.id, Outcome.training_record_pk_id, Outcome.status_date, Outcome.outcome_type
+        ).order_by(Outcome.training_record_pk_id, Outcome.status_date.asc(), Outcome.id.asc()):
+            latest[outcome.training_record_pk_id] = outcome
+        return latest
+
+    return _cached(db, "latest_outcome_by_training", load)
 
 
 def _all_training_rows(db: Session):
     """
     Every training record with its LATEST outcome (if any) and its
-    trainee. Returns a list of (TrainingRecord, Outcome|None, Trainee) —
+    trainee. Returns a list of (training row, outcome row|None, TraineeRef) —
     exactly one row per training record, even when several outcomes were
     recorded over time. This is the base dataset for overview / rate /
     course / provider / district / cohort analytics.
     """
-    latest_outcomes = _latest_outcome_by_training(db)
-    rows = (
-        db.query(TrainingRecord, Trainee)
-        .join(Trainee, TrainingRecord.trainee_pk_id == Trainee.id)
-        .all()
-    )
-    return [(tr, latest_outcomes.get(tr.id), trainee) for tr, trainee in rows]
+
+    def load():
+        latest_outcomes = _latest_outcome_by_training(db)
+        rows = (
+            db.query(
+                TrainingRecord.id,
+                TrainingRecord.trainee_pk_id,
+                TrainingRecord.course_name,
+                TrainingRecord.provider_name,
+                TrainingRecord.status,
+                TrainingRecord.end_date,
+                TrainingRecord.attendance_percentage,
+                TrainingRecord.assessment_score,
+                Trainee.district,
+            )
+            .join(Trainee, TrainingRecord.trainee_pk_id == Trainee.id)
+            .all()
+        )
+        return [
+            (tr, latest_outcomes.get(tr.id), TraineeRef(tr.trainee_pk_id, tr.district))
+            for tr in rows
+        ]
+
+    return _cached(db, "all_training_rows", load)
 
 
 def _trainee_outcome_types(db: Session) -> dict:
     """trainee_pk_id -> set of latest outcome_types across their COMPLETED trainings."""
-    latest_outcomes = _latest_outcome_by_training(db)
-    completed = db.query(TrainingRecord).filter(TrainingRecord.status == "Completed").all()
     mapping = defaultdict(set)
-    for tr in completed:
-        outcome = latest_outcomes.get(tr.id)
-        if outcome is not None:
+    for tr, outcome, _trainee in _all_training_rows(db):
+        if tr.status == "Completed" and outcome is not None:
             mapping[tr.trainee_pk_id].add(outcome.outcome_type)
     return mapping
 
 
 def _trainees_with_completed_training(db: Session) -> set:
-    return {
-        pk
-        for (pk,) in db.query(TrainingRecord.trainee_pk_id)
-        .filter(TrainingRecord.status == "Completed")
-        .distinct()
-    }
+    return {tr.trainee_pk_id for tr, _o, _t in _all_training_rows(db) if tr.status == "Completed"}
 
 
 def _latest_employment_status_rows(db: Session) -> dict:
@@ -190,21 +229,72 @@ def _latest_employment_status_rows(db: Session) -> dict:
     row at all are simply absent from the dict — callers fall back to
     employment_records.employment_status for those.
     """
-    history_rows = (
-        db.query(EmploymentStatusHistory)
-        .order_by(
+
+    def load():
+        history_rows = db.query(
+            EmploymentStatusHistory.employment_pk_id,
+            EmploymentStatusHistory.employment_status,
+            EmploymentStatusHistory.reason,
+        ).order_by(
             EmploymentStatusHistory.employment_pk_id,
             EmploymentStatusHistory.status_date.asc(),
             EmploymentStatusHistory.id.asc(),
         )
-        .all()
+        latest: dict = {}
+        for row in history_rows:
+            # Ascending order per employment_pk_id means the last write for
+            # each key ends up being the most recent row.
+            latest[row.employment_pk_id] = row
+        return latest
+
+    return _cached(db, "latest_employment_status_rows", load)
+
+
+def _employment_rows(db: Session) -> list:
+    """Every employment record (only the columns analytics reads)."""
+    return _cached(
+        db,
+        "employment_rows",
+        lambda: db.query(
+            EmploymentRecord.id,
+            EmploymentRecord.trainee_pk_id,
+            EmploymentRecord.employment_status,
+            EmploymentRecord.salary,
+            EmploymentRecord.joining_date,
+        ).all(),
     )
-    latest: dict = {}
-    for row in history_rows:
-        # Ascending order per employment_pk_id means the last write for
-        # each key ends up being the most recent row.
-        latest[row.employment_pk_id] = row
-    return latest
+
+
+def _followup_update_rows(db: Session) -> list:
+    """Every follow-up outcome update (only the columns analytics reads)."""
+    return _cached(
+        db,
+        "followup_update_rows",
+        lambda: db.query(
+            FollowUpOutcomeUpdate.trainee_pk_id,
+            FollowUpOutcomeUpdate.skill_gap,
+            FollowUpOutcomeUpdate.additional_training_needed,
+            FollowUpOutcomeUpdate.training_relevance,
+        ).all(),
+    )
+
+
+def _wages_by_employment(db: Session) -> dict:
+    """employment_pk_id -> its wage_history rows (only the columns progression reads)."""
+
+    def load():
+        by_employment = defaultdict(list)
+        for w in db.query(
+            WageHistory.id,
+            WageHistory.employment_pk_id,
+            WageHistory.effective_date,
+            WageHistory.salary,
+            WageHistory.salary_period,
+        ):
+            by_employment[w.employment_pk_id].append(w)
+        return dict(by_employment)
+
+    return _cached(db, "wages_by_employment", load)
 
 
 def _resolve_latest_status(
@@ -317,7 +407,7 @@ def get_employment_rate(db: Session) -> dict:
 
 
 def get_retention_rate(db: Session) -> dict:
-    employments = db.query(EmploymentRecord).all()
+    employments = _employment_rows(db)
     latest_rows = _latest_employment_status_rows(db)
 
     employed_trainees = len(employments)
@@ -346,9 +436,7 @@ def get_wage_progression(db: Session) -> dict:
     with every salary normalised to a monthly equivalent so Monthly and
     Annual records can be compared. Salary figures returned are monthly.
     """
-    by_employment = defaultdict(list)
-    for w in db.query(WageHistory).all():
-        by_employment[w.employment_pk_id].append(w)
+    by_employment = _wages_by_employment(db)
 
     initial_salaries = []
     latest_salaries = []
@@ -365,7 +453,7 @@ def get_wage_progression(db: Session) -> dict:
         growth_percentages.append(progression["growth_percentage"])
 
     return {
-        "employment_records": db.query(EmploymentRecord).count(),
+        "employment_records": len(_employment_rows(db)),
         "employment_records_with_wage_data": len(initial_salaries),
         "employment_records_with_wage_progression": sum(1 for c in changes if c is not None),
         "salary_basis": "Monthly (Annual salaries divided by 12)",
@@ -468,7 +556,7 @@ def get_demographics(db: Session) -> dict:
     trainees with at least one completed training, so trainees still in
     training are not counted as "not placed".
     """
-    trainees = db.query(Trainee).all()
+    trainees = db.query(Trainee.id, Trainee.gender, Trainee.dob).all()
     outcome_types_by_trainee = _trainee_outcome_types(db)
     completed_trainees = _trainees_with_completed_training(db)
     today = date.today()
@@ -541,13 +629,20 @@ def get_demographics(db: Session) -> dict:
 
 
 def get_non_placement_reasons(db: Session) -> list:
-    records = db.query(NonPlacementRecord).all()
-    total = len(records)
-    counts = Counter(r.reason_category for r in records)
-    return [
-        {"reason": reason, "count": count, "percentage": _pct(count, total)}
-        for reason, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-    ]
+    def load():
+        # Counted in the database: one row per reason instead of one per record
+        counts = dict(
+            db.query(NonPlacementRecord.reason_category, func.count(NonPlacementRecord.id))
+            .group_by(NonPlacementRecord.reason_category)
+            .all()
+        )
+        total = sum(counts.values())
+        return [
+            {"reason": reason, "count": count, "percentage": _pct(count, total)}
+            for reason, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        ]
+
+    return _cached(db, "non_placement_reasons", load)
 
 
 # ---------------------------------------------------------------------
@@ -556,7 +651,7 @@ def get_non_placement_reasons(db: Session) -> list:
 
 
 def get_attrition(db: Session) -> dict:
-    employments = db.query(EmploymentRecord).all()
+    employments = _employment_rows(db)
     latest_rows = _latest_employment_status_rows(db)
 
     total = len(employments)
@@ -604,7 +699,7 @@ def get_attrition(db: Session) -> dict:
 
 
 def get_skill_gaps(db: Session) -> dict:
-    updates = db.query(FollowUpOutcomeUpdate).all()
+    updates = _followup_update_rows(db)
     total = len(updates)
     skill_gap = sum(1 for u in updates if u.skill_gap is True)
     additional_training = sum(1 for u in updates if u.additional_training_needed is True)
@@ -621,7 +716,7 @@ def get_skill_gaps(db: Session) -> dict:
 
 
 def get_training_relevance(db: Session) -> dict:
-    updates = db.query(FollowUpOutcomeUpdate).all()
+    updates = _followup_update_rows(db)
     ratings = [u.training_relevance for u in updates if u.training_relevance is not None]
     total = len(ratings)
     counts = Counter(ratings)
@@ -697,7 +792,7 @@ def get_accountability(db: Session) -> dict:
     retention = get_retention_rate(db)
     relevance = get_training_relevance(db)
     skill_gaps = get_skill_gaps(db)
-    non_placement_count = db.query(NonPlacementRecord).count()
+    non_placement_count = sum(r["count"] for r in get_non_placement_reasons(db))
     attrition = get_attrition(db)
     wages = get_wage_progression(db)
 
@@ -798,15 +893,16 @@ def get_remedial_insights(db: Session) -> list:
 
 
 def get_resource_allocation(db: Session) -> list:
-    trainees = db.query(Trainee).all()
+    trainees = db.query(Trainee.id, Trainee.district).all()
     outcome_types_by_trainee = _trainee_outcome_types(db)
 
-    non_placement_by_trainee = Counter(
-        trainee_pk_id
-        for (trainee_pk_id,) in db.query(NonPlacementRecord.trainee_pk_id).all()
+    non_placement_by_trainee = dict(
+        db.query(NonPlacementRecord.trainee_pk_id, func.count(NonPlacementRecord.id))
+        .group_by(NonPlacementRecord.trainee_pk_id)
+        .all()
     )
 
-    followup_updates = db.query(FollowUpOutcomeUpdate).all()
+    followup_updates = _followup_update_rows(db)
     skill_gap_by_trainee = Counter(
         u.trainee_pk_id for u in followup_updates if u.skill_gap is True
     )
@@ -815,7 +911,7 @@ def get_resource_allocation(db: Session) -> list:
     )
 
     latest_rows = _latest_employment_status_rows(db)
-    employments = db.query(EmploymentRecord).all()
+    employments = _employment_rows(db)
     attrition_by_trainee = Counter()
     for emp in employments:
         status = _resolve_latest_status(emp, latest_rows)

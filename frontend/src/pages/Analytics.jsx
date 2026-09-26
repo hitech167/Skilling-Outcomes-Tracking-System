@@ -195,6 +195,22 @@ function BreakdownTable({ data, error, nameKey, nameTitle }) {
   );
 }
 
+// React StrictMode (development) mounts the page twice, which would fire every
+// request twice. Both mounts share this one in-flight load instead; it is
+// cleared once settled, so a later visit to the page still fetches fresh data.
+let pendingLoad = null;
+
+function loadAnalytics() {
+  if (!pendingLoad) {
+    pendingLoad = Promise.allSettled(
+      Object.keys(ENDPOINTS).map((key) => api.get(ENDPOINTS[key]))
+    ).finally(() => {
+      pendingLoad = null;
+    });
+  }
+  return pendingLoad;
+}
+
 export default function Analytics() {
   const [data, setData] = useState({});
   const [errors, setErrors] = useState({});
@@ -206,9 +222,7 @@ export default function Analytics() {
 
     async function fetchAll() {
       const keys = Object.keys(ENDPOINTS);
-      const results = await Promise.allSettled(
-        keys.map((key) => api.get(ENDPOINTS[key]))
-      );
+      const results = await loadAnalytics();
       if (!isMounted) return;
 
       const nextData = {};

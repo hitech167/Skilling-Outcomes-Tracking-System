@@ -32,8 +32,16 @@ def find_possible_duplicates(db: Session, full_name: str, dob, exclude_pk: int |
 
 
 def duplicate_groups(db: Session) -> list[dict]:
+    trainees = (
+        db.query(Trainee.trainee_id, Trainee.full_name, Trainee.dob).order_by(Trainee.id).all()
+    )
+    return group_duplicates(trainees)
+
+
+def group_duplicates(trainees) -> list[dict]:
+    """Group already-loaded trainee rows (trainee_id, full_name, dob) by normalised name + DOB."""
     groups = defaultdict(list)
-    for t in db.query(Trainee).all():
+    for t in trainees:
         groups[(normalise_name(t.full_name), t.dob)].append(t)
     result = []
     for (_name, dob), members in groups.items():
