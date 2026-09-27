@@ -27,7 +27,6 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
-from fastapi.middleware.cors import CORSMiddleware
 from database.connection import SessionLocal, get_db, init_db
 from services.auth import require_admin, require_analytics_access
 from routes import (
@@ -133,14 +132,6 @@ app = FastAPI(
     version="8.0.0",
     lifespan=lifespan,
 )
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # ---- CORS ------------------------------------------------------------
 # Browser frontends on another address need this. CORS_ORIGINS in .env is a
 # comma-separated list of allowed origins; unset = common local dev servers.
@@ -171,6 +162,9 @@ ADMIN_ONLY = [Depends(require_admin)]
 ANALYTICS_ACCESS = [Depends(require_analytics_access)]
 
 app.include_router(auth.router)
+# Programme-wide aggregates for external stakeholders — no login by design
+# (allow-listed fields, small groups suppressed; see routes/analytics.py).
+app.include_router(analytics.public_router)
 # Signed single-use links for trainees / employers — no login by design.
 app.include_router(self_service.public_router)
 app.include_router(profile_links.public_router)

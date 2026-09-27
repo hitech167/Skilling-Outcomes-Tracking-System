@@ -29,6 +29,10 @@ logic and the definitions used (placement, retention, attrition, etc).
     GET /api/analytics/remedial-insights
     GET /api/analytics/resource-allocation
 
+Public (no login, see public_router below):
+
+    GET /api/public/impact-summary
+
 No filters (district/provider/course/gender query params) are
 implemented yet — see Part 19 of the spec, which allows deferring
 filters if they would complicate the code; they can be added later by
@@ -36,8 +40,11 @@ filtering the row lists in analytics_service.py before aggregation.
 """
 
 import logging
+import threading
+import time
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -53,6 +60,7 @@ from schemas.analytics import (
     NonPlacementReasonItem,
     OverviewResponse,
     PlacementRateResponse,
+    PublicImpactSummaryResponse,
     ProviderPerformanceItem,
     RemedialInsightItem,
     ResourceAllocationItem,
@@ -243,3 +251,50 @@ def remedial_insights(db: Session = Depends(get_analytics_db)):
 )
 def resource_allocation(db: Session = Depends(get_analytics_db)):
     return _safe(db, analytics_service.get_resource_allocation)
+
+
+# ---------------------------------------------------------------------
+# Public impact summary — no login, for external stakeholders
+# ---------------------------------------------------------------------
+#
+# Registered in main.py WITHOUT an auth dependency. What keeps it safe:
+#  - GET only, and it returns a fixed allow-list of programme-wide
+#    aggregates (PublicImpactSummaryResponse) — no IDs, names, contact
+#    details, provider names or free text.
+#  - Same consent-scoped session as the staff analytics, so trainees who
+#    withdrew consent are excluded here too.
+#  - Small groups are suppressed (null) — see PUBLIC_MIN_GROUP_SIZE.
+#  - The result is computed at most once per PUBLIC_CACHE_SECONDS for the
+#    whole process, so anonymous traffic cannot drive database load.
+
+public_router = APIRouter(prefix="/api/public", tags=["Public impact (no login)"])
+
+PUBLIC_CACHE_SECONDS = 300
+_public_cache: dict = {}
+_public_cache_lock = threading.Lock()
+
+
+def clear_public_cache() -> None:
+    with _public_cache_lock:
+        _public_cache.clear()
+
+
+def _impact_summary(db: Session) -> dict:
+    summary = analytics_service.get_public_impact_summary(db)
+    summary["generated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return summary
+
+
+@public_router.get(
+    "/impact-summary",
+    response_model=PublicImpactSummaryResponse,
+    summary="Programme-wide impact figures, safe to publish (no login, small groups suppressed)",
+)
+def public_impact_summary(response: Response, db: Session = Depends(get_analytics_db)):
+    with _public_cache_lock:
+        cached = _public_cache.get("summary")
+        if cached is None or time.monotonic() - cached[0] > PUBLIC_CACHE_SECONDS:
+            cached = (time.monotonic(), _safe(db, _impact_summary))
+            _public_cache["summary"] = cached
+    response.headers["Cache-Control"] = f"public, max-age={PUBLIC_CACHE_SECONDS}"
+    return cached[1]

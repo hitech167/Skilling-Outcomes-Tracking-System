@@ -30,3 +30,10 @@ def test_unknown_origin_is_not_allowed():
 def test_simple_request_carries_cors_header():
     res = anon.get("/api/system/health", headers={"Origin": "http://localhost:3000"})
     assert res.headers["access-control-allow-origin"] == "http://localhost:3000"
+
+
+def test_simple_request_never_allows_credentials():
+    # Auth is a bearer header, so no response should invite cookie credentials
+    res = anon.get("/api/system/health", headers={"Origin": "http://localhost:5173"})
+    assert res.headers["access-control-allow-origin"] == "http://localhost:5173"
+    assert "access-control-allow-credentials" not in res.headers

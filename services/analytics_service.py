@@ -957,3 +957,103 @@ def get_resource_allocation(db: Session) -> list:
         {"district": district, **stats}
         for district, stats in sorted(by_district.items())
     ]
+
+
+# ---------------------------------------------------------------------
+# Public impact summary (GET /api/public/impact-summary — no login)
+# ---------------------------------------------------------------------
+
+# Smallest group a public figure may describe. A count of 1-4, or a rate /
+# average over fewer than this many people, could point to individuals
+# ("the one apprentice from X"), so it is published as null instead.
+PUBLIC_MIN_GROUP_SIZE = 5
+
+
+def _public_count(value: int) -> int | None:
+    """0 and counts >= the minimum group size are safe; 1..k-1 are suppressed."""
+    return value if value == 0 or value >= PUBLIC_MIN_GROUP_SIZE else None
+
+
+def _public_rate(rate: float, population: int) -> float | None:
+    return rate if population >= PUBLIC_MIN_GROUP_SIZE else None
+
+
+def get_public_impact_summary(db: Session) -> dict:
+    """
+    Programme-wide aggregates that are safe to publish without a login.
+    Built only from the staff analytics functions (so the same definitions
+    and the same consent scope apply), then reduced to an allow-list of
+    fields with small groups suppressed. Nothing per-trainee, per-provider
+    or free-text is included.
+    """
+    k = PUBLIC_MIN_GROUP_SIZE
+    overview = get_overview(db)
+    retention = get_retention_rate(db)
+    completed = overview["completed_trainings"]
+
+    # Wages: separate populations for the averages and for growth
+    initial, latest, growth = [], [], []
+    for entries in _wages_by_employment(db).values():
+        progression = wage_progression_for(entries)
+        if progression is None:
+            continue
+        initial.append(progression["initial_monthly"])
+        latest.append(progression["latest_monthly"])
+        if progression["growth_percentage"] is not None:
+            growth.append(progression["growth_percentage"])
+    with_wages = len(initial)
+
+    # Districts: only those with enough completed trainings are named; the
+    # rest are pooled so a small district's figures can't be singled out.
+    districts = get_district_outcomes(db)
+    named, pooled = [], {"districts": 0, "completed": 0, "placed": 0}
+    for d in districts:
+        if d["completed"] >= k:
+            named.append(
+                {
+                    "district": d["district"],
+                    "completed_trainings": d["completed"],
+                    "placed_trainees": d["placed"],
+                    "placement_rate": d["placement_rate"],
+                }
+            )
+        elif d["completed"] > 0:
+            pooled["districts"] += 1
+            pooled["completed"] += d["completed"]
+            pooled["placed"] += d["placed"]
+    named.sort(key=lambda d: d["completed_trainings"], reverse=True)
+
+    return {
+        "min_group_size": k,
+        "trainees_registered": _public_count(overview["total_trainees"]),
+        "trainings_completed": _public_count(completed),
+        "placed_trainees": _public_count(overview["placed_trainees"]),
+        "placement_rate": _public_rate(overview["placement_rate"], completed),
+        "employment_rate": _public_rate(overview["employment_rate"], completed),
+        "retention_rate": _public_rate(retention["retention_rate"], retention["employed_trainees"]),
+        "outcome_mix": {
+            "employed": _public_count(overview["employed_trainees"]),
+            "self_employed": _public_count(overview["self_employed_trainees"]),
+            "apprenticeship": _public_count(overview["apprenticeship_trainees"]),
+            "further_education": _public_count(overview["further_education_trainees"]),
+        },
+        "districts_covered": len(districts),
+        "wages": {
+            "salary_basis": "Monthly (Annual salaries divided by 12)",
+            "employments_measured": _public_count(with_wages),
+            "average_initial_monthly": _avg(initial) if with_wages >= k else None,
+            "average_latest_monthly": _avg(latest) if with_wages >= k else None,
+            "average_growth_percentage": _avg(growth) if len(growth) >= k else None,
+        },
+        "districts": named,
+        "other_districts": (
+            {
+                "districts": pooled["districts"],
+                "completed_trainings": pooled["completed"],
+                "placed_trainees": pooled["placed"],
+                "placement_rate": _pct(pooled["placed"], pooled["completed"]),
+            }
+            if pooled["completed"] >= k
+            else None
+        ),
+    }

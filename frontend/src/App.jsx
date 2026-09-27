@@ -12,6 +12,7 @@ import ImportPlacements from "./pages/ImportPlacements";
 import Insights from "./pages/Insights";
 import Identity from "./pages/Identity";
 import WageHistory from "./pages/WageHistory";
+import ImpactDashboard from "./pages/ImpactDashboard";
 import StaffLayout from "./layouts/StaffLayout";
 import RequireRole from "./layouts/RequireRole";
 import { ADMIN_ONLY, ANALYTICS_ROLES } from "./constants/roles";
@@ -35,6 +36,9 @@ function App() {
       <Routes>
         <Route path="/" element={<RootRedirect />} />
         <Route path="/login" element={<Login />} />
+
+        {/* Public, no login: aggregate impact figures for external stakeholders */}
+        <Route path="/impact" element={<ImpactDashboard />} />
 
         {/* Protected Admin/Staff Routes with shared StaffLayout */}
         <Route

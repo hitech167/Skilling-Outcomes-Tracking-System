@@ -181,3 +181,54 @@ class ResourceAllocationItem(BaseModel):
     non_placement_count: int
     attrition_count: int
     additional_training_needed: int
+
+
+# ---------------------------------------------------------------------
+# Public impact summary (no login). Suppressed figures are null — see
+# PUBLIC_MIN_GROUP_SIZE in services/analytics_service.py.
+# ---------------------------------------------------------------------
+
+
+class PublicOutcomeMix(BaseModel):
+    employed: Optional[int] = None
+    self_employed: Optional[int] = None
+    apprenticeship: Optional[int] = None
+    further_education: Optional[int] = None
+
+
+class PublicWageSummary(BaseModel):
+    salary_basis: str
+    employments_measured: Optional[int] = None
+    average_initial_monthly: Optional[float] = None
+    average_latest_monthly: Optional[float] = None
+    average_growth_percentage: Optional[float] = None
+
+
+class PublicDistrictItem(BaseModel):
+    district: str
+    completed_trainings: int
+    placed_trainees: int
+    placement_rate: float
+
+
+class PublicOtherDistricts(BaseModel):
+    districts: int
+    completed_trainings: int
+    placed_trainees: int
+    placement_rate: float
+
+
+class PublicImpactSummaryResponse(BaseModel):
+    min_group_size: int
+    trainees_registered: Optional[int] = None
+    trainings_completed: Optional[int] = None
+    placed_trainees: Optional[int] = None
+    placement_rate: Optional[float] = None
+    employment_rate: Optional[float] = None
+    retention_rate: Optional[float] = None
+    outcome_mix: PublicOutcomeMix
+    districts_covered: int
+    wages: PublicWageSummary
+    districts: list[PublicDistrictItem]
+    other_districts: Optional[PublicOtherDistricts] = None
+    generated_at: str
