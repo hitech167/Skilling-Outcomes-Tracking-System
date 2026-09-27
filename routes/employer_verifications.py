@@ -4,6 +4,7 @@ Employer verification routes — Phase 4.
 POST /api/employer-verifications                    -> create a verification record
 GET  /api/employer-verifications                    -> list verification records (filter by status)
 GET  /api/employer-verifications/{verification_id}  -> get one verification record
+PATCH /api/employer-verifications/{verification_id}/status -> staff confirm / reject a Pending request
 GET  /api/employment/{employment_id}/verification    -> get the latest verification for an employment
 
 No employer portal exists yet — this just stores verification
@@ -14,6 +15,7 @@ on database/models.py:EmployerVerification).
 """
 
 import logging
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -27,6 +29,7 @@ from routes._shared import get_employment_or_404, get_trainee_or_404
 from schemas.employer_verification import (
     EmployerVerificationCreate,
     EmployerVerificationResponse,
+    EmployerVerificationStatusUpdate,
 )
 
 logger = logging.getLogger(__name__)
@@ -162,6 +165,69 @@ def get_employer_verification(verification_id: str, db: Session = Depends(get_db
     )
     trainee = db.query(Trainee).filter(Trainee.id == record.trainee_pk_id).first()
 
+    return to_response(record, employment, trainee)
+
+
+@router.patch(
+    "/api/employer-verifications/{verification_id}/status",
+    response_model=EmployerVerificationResponse,
+    summary="Confirm, reject or close a Pending verification (e.g. after a phone call)",
+)
+def update_employer_verification_status(
+    verification_id: str,
+    payload: EmployerVerificationStatusUpdate,
+    db: Session = Depends(get_db),
+):
+    # Lock the row so a staff decision and an employer's link submission
+    # cannot both be applied to the same Pending request
+    record = (
+        db.query(EmployerVerification)
+        .filter(EmployerVerification.verification_id == verification_id.strip().upper())
+        .with_for_update()
+        .first()
+    )
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No verification record found with ID {verification_id}",
+        )
+    # Decided records are history: a new attempt is a new record, never an edit
+    if record.verification_status != "Pending":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Verification {record.verification_id} is already "
+                f"'{record.verification_status}'. Only Pending requests can be updated; "
+                "send a new verification request instead."
+            ),
+        )
+
+    try:
+        record.verification_status = payload.verification_status
+        record.verified_date = date.today()
+        record.verified_by = payload.verified_by
+        if payload.verification_notes:
+            record.verification_notes = payload.verification_notes
+        db.commit()
+        db.refresh(record)
+    except SQLAlchemyError:
+        db.rollback()
+        logger.exception("Database error while updating an employer verification")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not save the record right now. Please try again.",
+        )
+
+    logger.info(
+        "Verification %s marked %s by staff", record.verification_id, record.verification_status
+    )
+
+    employment = (
+        db.query(EmploymentRecord)
+        .filter(EmploymentRecord.id == record.employment_pk_id)
+        .first()
+    )
+    trainee = db.query(Trainee).filter(Trainee.id == record.trainee_pk_id).first()
     return to_response(record, employment, trainee)
 
 

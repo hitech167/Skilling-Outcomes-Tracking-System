@@ -94,6 +94,41 @@ class EmployerVerificationCreate(BaseModel):
         return cleaned
 
 
+class EmployerVerificationStatusUpdate(BaseModel):
+    """Body of PATCH /api/employer-verifications/{verification_id}/status
+
+    Staff decision on a Pending request, e.g. after confirming by phone.
+    """
+
+    verification_status: str
+    verified_by: Optional[str] = Field(None, max_length=150)
+    verification_notes: Optional[str] = Field(None, max_length=2000)
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "verification_status": "Verified",
+                "verified_by": "Admin",
+                "verification_notes": "Confirmed by phone with the HR manager.",
+            }
+        }
+    }
+
+    @field_validator("verification_status")
+    @classmethod
+    def valid_status(cls, value: str) -> str:
+        allowed = ALLOWED_VERIFICATION_STATUSES - {"Pending"}
+        matched = next((s for s in allowed if s.lower() == value.strip().lower()), None)
+        if matched is None:
+            raise ValueError(f"verification_status must be one of: {', '.join(sorted(allowed))}")
+        return matched
+
+    @field_validator("verified_by", "verification_notes")
+    @classmethod
+    def blank_to_none(cls, value: Optional[str]) -> Optional[str]:
+        return value.strip() or None if value is not None else None
+
+
 class EmployerVerificationResponse(BaseModel):
     verification_id: str
     employment_id: str

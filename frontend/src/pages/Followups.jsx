@@ -23,6 +23,8 @@ import {
   Empty,
   Descriptions,
   Checkbox,
+  Radio,
+  Rate,
 } from 'antd';
 import {
   SendOutlined,
@@ -38,8 +40,10 @@ import {
   CloseOutlined,
   PlusOutlined,
   CalendarOutlined,
+  FormOutlined,
+  LinkOutlined,
 } from '@ant-design/icons';
-import { api } from '../api/client';
+import { api, errorMessage } from '../api/client';
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -66,6 +70,32 @@ function getStatColor(key) {
   }
   return '#1f2937';
 }
+
+// Must match ALLOWED_OUTCOME_TYPES / ALLOWED_REASON_CATEGORIES on the backend
+const OUTCOME_TYPES = [
+  'Employed',
+  'Self-employed',
+  'Apprenticeship',
+  'Unemployed',
+  'Further Education',
+  'Not Reachable',
+];
+const UNEMPLOYMENT_REASONS = [
+  'Skill Gap',
+  'Lack of Jobs',
+  'Low Salary',
+  'Location Problem',
+  'Relocation Issue',
+  'Personal/Family Reason',
+  'Further Education',
+  'Other',
+];
+
+// Optional yes/no answers: left unselected when the trainee was not asked
+const YES_NO_OPTIONS = [
+  { label: 'Yes', value: true },
+  { label: 'No', value: false },
+];
 
 function outcomeTypeColor(type) {
   const map = {
@@ -118,6 +148,19 @@ export default function Followups() {
   const [selectedRecord, setSelectedRecord] = useState(null);
   const [submittingAttempt, setSubmittingAttempt] = useState(false);
   const [attemptForm] = Form.useForm();
+
+  // Outcome update modal state (row-level)
+  const [outcomeRecord, setOutcomeRecord] = useState(null);
+  const [submittingOutcome, setSubmittingOutcome] = useState(false);
+  const [outcomeError, setOutcomeError] = useState(null);
+  const [outcomeForm] = Form.useForm();
+  const outcomeStatus = Form.useWatch('employment_status', outcomeForm);
+
+  // Self-report link modal state (row-level)
+  const [linkRecord, setLinkRecord] = useState(null);
+  const [linkData, setLinkData] = useState(null);
+  const [linkLoading, setLinkLoading] = useState(false);
+  const [linkError, setLinkError] = useState(null);
 
   // Trainee ID search / filter state
   const [searchInput, setSearchInput] = useState('');
@@ -298,6 +341,62 @@ export default function Followups() {
       message.error(err?.detail || 'Failed to log contact attempt');
     } finally {
       setSubmittingAttempt(false);
+    }
+  };
+
+  // Outcome update: the trainee's current situation, recorded against this follow-up
+  const openOutcomeModal = (record) => {
+    outcomeForm.resetFields();
+    setOutcomeError(null);
+    setOutcomeRecord(record);
+  };
+
+  const handleOutcomeSubmit = async (values) => {
+    if (!outcomeRecord?.followup_id) return;
+    setSubmittingOutcome(true);
+    setOutcomeError(null);
+
+    const payload = { employment_status: values.employment_status };
+    if (values.training_relevance) payload.training_relevance = values.training_relevance;
+    if (values.skill_gap !== undefined) payload.skill_gap = values.skill_gap;
+    if (values.additional_training_needed !== undefined) {
+      payload.additional_training_needed = values.additional_training_needed;
+    }
+    // The backend only accepts a reason when the trainee is unemployed
+    if (values.employment_status === 'Unemployed') {
+      if (values.unemployment_reason_category) {
+        payload.unemployment_reason_category = values.unemployment_reason_category;
+      }
+      if (values.unemployment_reason_details?.trim()) {
+        payload.unemployment_reason_details = values.unemployment_reason_details.trim();
+      }
+    }
+    if (values.notes?.trim()) payload.notes = values.notes.trim();
+
+    try {
+      await api.post(`/api/followups/${outcomeRecord.followup_id}/outcome-update`, payload);
+      message.success(`Outcome update recorded for ${outcomeRecord.trainee_id}.`);
+      setOutcomeRecord(null);
+    } catch (err) {
+      setOutcomeError(errorMessage(err, 'Failed to record the outcome update.'));
+    } finally {
+      setSubmittingOutcome(false);
+    }
+  };
+
+  // Self-report link: a signed link staff can share with the trainee by hand
+  const openLinkModal = async (record) => {
+    setLinkRecord(record);
+    setLinkData(null);
+    setLinkError(null);
+    setLinkLoading(true);
+    try {
+      const res = await api.get(`/api/followups/${record.followup_id}/self-report-link`);
+      setLinkData(res);
+    } catch (err) {
+      setLinkError(errorMessage(err, 'Failed to get the self-report link.'));
+    } finally {
+      setLinkLoading(false);
     }
   };
 
@@ -542,6 +641,18 @@ export default function Followups() {
             label: 'Log Attempt',
             icon: <PhoneOutlined style={{ color: '#1677ff' }} />,
             onClick: () => openLogAttemptModal(record),
+          },
+          {
+            key: 'outcome_update',
+            label: 'Record Outcome Update',
+            icon: <FormOutlined style={{ color: '#722ed1' }} />,
+            onClick: () => openOutcomeModal(record),
+          },
+          {
+            key: 'self_report_link',
+            label: 'Self-report Link',
+            icon: <LinkOutlined style={{ color: '#13c2c2' }} />,
+            onClick: () => openLinkModal(record),
           },
         ];
 
@@ -1143,6 +1254,120 @@ export default function Followups() {
             />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* ── Record Outcome Update Modal ──────────────────────────────── */}
+      <Modal
+        title="Record Outcome Update"
+        open={Boolean(outcomeRecord)}
+        onCancel={() => !submittingOutcome && setOutcomeRecord(null)}
+        onOk={() => outcomeForm.submit()}
+        confirmLoading={submittingOutcome}
+        okText="Save Update"
+        destroyOnHidden
+        centered
+        width={560}
+      >
+        <Text type="secondary" style={{ display: 'block', marginBottom: 16, marginTop: 4 }}>
+          Current situation of Trainee{' '}
+          <strong style={{ color: '#1677ff' }}>{outcomeRecord?.trainee_id}</strong>
+          {outcomeRecord?.followup_type ? ` at the ${outcomeRecord.followup_type} check-in` : ''}.
+        </Text>
+
+        {outcomeError && (
+          <Alert type="error" showIcon message={outcomeError} style={{ marginBottom: 16, borderRadius: 8 }} />
+        )}
+
+        <Form form={outcomeForm} layout="vertical" onFinish={handleOutcomeSubmit}>
+          <Form.Item
+            name="employment_status"
+            label="Current Situation"
+            rules={[{ required: true, message: 'Please select the current situation' }]}
+          >
+            <Select placeholder="Select current situation...">
+              {OUTCOME_TYPES.map((t) => (
+                <Select.Option key={t} value={t}>
+                  {t}
+                </Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          {outcomeStatus === 'Unemployed' && (
+            <>
+              <Form.Item name="unemployment_reason_category" label="Main Reason">
+                <Select placeholder="Why is the trainee not working?" allowClear>
+                  {UNEMPLOYMENT_REASONS.map((r) => (
+                    <Select.Option key={r} value={r}>
+                      {r}
+                    </Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+              <Form.Item name="unemployment_reason_details" label="Reason Details">
+                <Input.TextArea rows={2} maxLength={2000} placeholder="Optional details" />
+              </Form.Item>
+            </>
+          )}
+
+          <Form.Item name="training_relevance" label="Training Relevance (1 = not at all, 5 = very)">
+            <Rate count={5} />
+          </Form.Item>
+
+          <Space size={32} wrap>
+            <Form.Item name="skill_gap" label="Skill gap reported?">
+              <Radio.Group options={YES_NO_OPTIONS} optionType="button" />
+            </Form.Item>
+            <Form.Item name="additional_training_needed" label="Needs more training?">
+              <Radio.Group options={YES_NO_OPTIONS} optionType="button" />
+            </Form.Item>
+          </Space>
+
+          <Form.Item name="notes" label="Notes (Optional)" style={{ marginBottom: 0 }}>
+            <Input.TextArea
+              rows={3}
+              maxLength={2000}
+              showCount
+              placeholder="e.g. Trainee is still working at the same company..."
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* ── Self-report Link Modal ──────────────────────────────────── */}
+      <Modal
+        title="Self-report Link"
+        open={Boolean(linkRecord)}
+        onCancel={() => setLinkRecord(null)}
+        footer={[
+          <Button key="close" type="primary" onClick={() => setLinkRecord(null)}>
+            Done
+          </Button>,
+        ]}
+        destroyOnHidden
+        centered
+      >
+        <Text type="secondary" style={{ display: 'block', marginBottom: 16, marginTop: 4 }}>
+          Share this link with Trainee{' '}
+          <strong style={{ color: '#1677ff' }}>{linkRecord?.trainee_id}</strong> (e.g. by WhatsApp)
+          so they can report their current situation without logging in.
+        </Text>
+        {linkLoading ? (
+          <div style={{ textAlign: 'center', padding: '24px 0' }}>
+            <Spin />
+          </div>
+        ) : linkError ? (
+          <Alert type="error" showIcon message={linkError} />
+        ) : linkData ? (
+          <Descriptions bordered size="small" column={1}>
+            <Descriptions.Item label="Link">
+              <Text copyable style={{ wordBreak: 'break-all' }}>
+                {linkData.link}
+              </Text>
+            </Descriptions.Item>
+            <Descriptions.Item label="Valid for">{linkData.valid_days} days</Descriptions.Item>
+          </Descriptions>
+        ) : null}
       </Modal>
 
       {/* Dispatch Result Details Modal (Optional detail view) */}

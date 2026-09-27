@@ -15,6 +15,9 @@ import {
   Spin,
   Alert,
   Empty,
+  Form,
+  Input,
+  Space,
   message,
 } from 'antd';
 import {
@@ -24,9 +27,11 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   QuestionCircleOutlined,
+  SendOutlined,
 } from '@ant-design/icons';
 import { motion } from 'framer-motion';
-import { api } from '../api/client';
+import { api, errorMessage } from '../api/client';
+import SendVerificationModal from '../components/SendVerificationModal';
 
 const { Title, Text } = Typography;
 
@@ -38,6 +43,13 @@ const STATUSES = [
 ];
 
 const STATUS_COLORS = Object.fromEntries(STATUSES.map((s) => [s.value, s.color]));
+
+// Staff decisions on a Pending request (PATCH /api/employer-verifications/{id}/status)
+const DECISIONS = {
+  Verified: { label: 'Confirm', okText: 'Confirm employment', danger: false },
+  Rejected: { label: 'Reject', okText: 'Reject', danger: true },
+  'Unable to Verify': { label: 'Unable to verify', okText: 'Mark unable to verify', danger: false },
+};
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -93,6 +105,13 @@ export default function Employers() {
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState(null);
+
+  const [decision, setDecision] = useState(null);
+  const [deciding, setDeciding] = useState(false);
+  const [decisionError, setDecisionError] = useState(null);
+  const [decisionForm] = Form.useForm();
+
+  const [sendOpen, setSendOpen] = useState(false);
 
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -160,6 +179,37 @@ export default function Employers() {
     setSelectedId(null);
     setDetail(null);
     setDetailError(null);
+  };
+
+  const openDecision = (status) => {
+    setDecisionError(null);
+    decisionForm.resetFields();
+    setDecision(status);
+  };
+
+  const handleDecision = async (values) => {
+    setDeciding(true);
+    setDecisionError(null);
+    try {
+      const updated = await api.patch(
+        `/api/employer-verifications/${encodeURIComponent(detail.verification_id)}/status`,
+        {
+          verification_status: decision,
+          verified_by: values.verified_by?.trim() || null,
+          verification_notes: values.verification_notes?.trim() || null,
+        }
+      );
+      setDetail(updated);
+      setVerifications((prev) =>
+        prev.map((v) => (v.verification_id === updated.verification_id ? updated : v))
+      );
+      setDecision(null);
+      message.success(`Verification ${updated.verification_id} marked ${updated.verification_status}.`);
+    } catch (err) {
+      setDecisionError(errorMessage(err, 'Failed to update the verification.'));
+    } finally {
+      setDeciding(false);
+    }
   };
 
   const handleRemind = async () => {
@@ -395,6 +445,13 @@ export default function Employers() {
         open={Boolean(selectedId)}
         onClose={closeDetail}
         size="large"
+        extra={
+          detail && (
+            <Button icon={<SendOutlined />} onClick={() => setSendOpen(true)}>
+              Send new request
+            </Button>
+          )
+        }
       >
         {detailLoading ? (
           <div style={{ display: 'flex', justifyContent: 'center', padding: '40px 0' }}>
@@ -403,31 +460,99 @@ export default function Employers() {
         ) : detailError ? (
           <Alert type="error" showIcon message={detailError} />
         ) : detail ? (
-          <Descriptions column={1} bordered size="small">
-            <Descriptions.Item label="Status">
-              <StatusTag status={detail.verification_status} />
-            </Descriptions.Item>
-            <Descriptions.Item label="Employer">{detail.employer_name}</Descriptions.Item>
-            <Descriptions.Item label="Employer contact">
-              {detail.employer_contact || '—'}
-            </Descriptions.Item>
-            <Descriptions.Item label="Trainee">
-              <Link to={`/trainees/${detail.trainee_id}`}>
-                {detail.trainee_name || detail.trainee_id}
-              </Link>{' '}
-              <Text type="secondary">({detail.trainee_id})</Text>
-            </Descriptions.Item>
-            <Descriptions.Item label="Employment ID">{detail.employment_id}</Descriptions.Item>
-            <Descriptions.Item label="Job role">{detail.job_role || '—'}</Descriptions.Item>
-            <Descriptions.Item label="Salary">{formatSalary(detail.salary)}</Descriptions.Item>
-            <Descriptions.Item label="Method">{detail.verification_method}</Descriptions.Item>
-            <Descriptions.Item label="Requested">{formatDate(detail.created_at)}</Descriptions.Item>
-            <Descriptions.Item label="Verified on">{formatDate(detail.verified_date)}</Descriptions.Item>
-            <Descriptions.Item label="Verified by">{detail.verified_by || '—'}</Descriptions.Item>
-            <Descriptions.Item label="Notes">{detail.verification_notes || '—'}</Descriptions.Item>
-          </Descriptions>
+          <>
+            {detail.verification_status === 'Pending' && (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 16 }}
+                message="Waiting for the employer"
+                description="Confirmed by phone or document instead? Record the decision here."
+                action={
+                  <Space direction="vertical" size={6}>
+                    {Object.entries(DECISIONS).map(([status, d]) => (
+                      <Button
+                        key={status}
+                        size="small"
+                        block
+                        type={status === 'Verified' ? 'primary' : 'default'}
+                        danger={d.danger}
+                        onClick={() => openDecision(status)}
+                      >
+                        {d.label}
+                      </Button>
+                    ))}
+                  </Space>
+                }
+              />
+            )}
+            <Descriptions column={1} bordered size="small">
+              <Descriptions.Item label="Status">
+                <StatusTag status={detail.verification_status} />
+              </Descriptions.Item>
+              <Descriptions.Item label="Employer">{detail.employer_name}</Descriptions.Item>
+              <Descriptions.Item label="Employer contact">
+                {detail.employer_contact || '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label="Trainee">
+                <Link to={`/trainees/${detail.trainee_id}`}>
+                  {detail.trainee_name || detail.trainee_id}
+                </Link>{' '}
+                <Text type="secondary">({detail.trainee_id})</Text>
+              </Descriptions.Item>
+              <Descriptions.Item label="Employment ID">{detail.employment_id}</Descriptions.Item>
+              <Descriptions.Item label="Job role">{detail.job_role || '—'}</Descriptions.Item>
+              <Descriptions.Item label="Salary">{formatSalary(detail.salary)}</Descriptions.Item>
+              <Descriptions.Item label="Method">{detail.verification_method}</Descriptions.Item>
+              <Descriptions.Item label="Requested">{formatDate(detail.created_at)}</Descriptions.Item>
+              <Descriptions.Item label="Verified on">{formatDate(detail.verified_date)}</Descriptions.Item>
+              <Descriptions.Item label="Verified by">{detail.verified_by || '—'}</Descriptions.Item>
+              <Descriptions.Item label="Notes">{detail.verification_notes || '—'}</Descriptions.Item>
+            </Descriptions>
+          </>
         ) : null}
       </Drawer>
+
+      {/* Staff decision on a Pending verification */}
+      <Modal
+        title={decision ? `Mark as ${decision}?` : ''}
+        open={Boolean(decision)}
+        onOk={() => decisionForm.submit()}
+        okText={decision && DECISIONS[decision].okText}
+        okButtonProps={{ danger: decision && DECISIONS[decision].danger }}
+        confirmLoading={deciding}
+        onCancel={() => !deciding && setDecision(null)}
+        destroyOnHidden
+      >
+        {decisionError && (
+          <Alert type="error" showIcon message={decisionError} style={{ marginBottom: 16 }} />
+        )}
+        <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+          This closes the request; the employer's link will no longer accept an answer.
+        </Text>
+        <Form form={decisionForm} layout="vertical" onFinish={handleDecision}>
+          <Form.Item label="Verified by" name="verified_by" rules={[{ max: 150 }]}>
+            <Input placeholder="e.g. R. Deshmukh, HR Manager (phone)" />
+          </Form.Item>
+          <Form.Item label="Notes" name="verification_notes" rules={[{ max: 2000 }]}>
+            <Input.TextArea rows={3} placeholder="How was this confirmed?" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <SendVerificationModal
+        open={sendOpen}
+        employment={
+          detail && {
+            employment_id: detail.employment_id,
+            company_name: detail.employer_name,
+            job_role: detail.job_role,
+          }
+        }
+        defaultContact={detail?.employer_contact}
+        onClose={() => setSendOpen(false)}
+        onSent={reload}
+      />
     </div>
   );
 }

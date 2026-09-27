@@ -359,6 +359,7 @@ Access: **A** = admin, **A/An** = admin or analyst, **P** = public.
 |---|---|---|
 | POST | `/api/employer-verifications` | Record a verification (document, call, …) |
 | GET | `/api/employer-verifications/{verification_id}` | One verification |
+| PATCH | `/api/employer-verifications/{verification_id}/status` | Staff confirm / reject / mark unable to verify a **Pending** request (409 otherwise) |
 | POST | `/api/employment-signals/import` | Import external placements from CSV (§11.4) |
 | GET | `/api/employment/{employment_id}/verification` | Latest verification for a job |
 | POST | `/api/employment/{employment_id}/verification-request` | Create an employer confirmation link (§11) |

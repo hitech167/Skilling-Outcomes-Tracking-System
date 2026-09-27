@@ -87,11 +87,21 @@ export const api = {
 
 /**
  * A message for an error from request()/login(): the backend's own detail
- * when it sent one, a connection message when the server could not be
- * reached at all (fetch threw, so there is no status), else `fallback`.
+ * when it sent one (a 422's field errors joined into one line), a connection
+ * message when the server could not be reached at all (fetch threw, so there
+ * is no status), else `fallback`.
  */
 export function errorMessage(err, fallback) {
     if (typeof err?.detail === "string" && err.detail) return err.detail;
+    if (Array.isArray(err?.detail) && err.detail.length) {
+        return err.detail
+            .map((e) => {
+                const field = e.loc?.slice(1).join(".");
+                const msg = (e.msg || "").replace(/^Value error, /, "");
+                return field ? `${field}: ${msg}` : msg;
+            })
+            .join(", ");
+    }
     if (err?.status === undefined) {
         return "Could not reach the server. Check your connection and try again.";
     }

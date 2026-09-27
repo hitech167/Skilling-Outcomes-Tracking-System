@@ -29,9 +29,14 @@ import {
   SwapOutlined,
   PlusOutlined,
   InfoCircleOutlined,
+  HistoryOutlined,
+  SendOutlined,
 } from '@ant-design/icons';
 import { api, errorMessage } from '../api/client';
 import ExternalIds from '../components/ExternalIds';
+import EmploymentStatusModal from '../components/EmploymentStatusModal';
+import SendVerificationModal from '../components/SendVerificationModal';
+import { RETENTION_STATUS_COLORS } from '../constants/employment';
 
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
@@ -93,6 +98,10 @@ export default function TraineeDetail() {
     contact: false,
   });
   const [contactError, setContactError] = useState(null);
+
+  // Employment tab row actions
+  const [statusEmployment, setStatusEmployment] = useState(null);
+  const [verifyEmployment, setVerifyEmployment] = useState(null);
 
   // `shared` reuses an identical request already in flight (the mount load,
   // which StrictMode runs twice in development); refreshes fetch fresh.
@@ -160,6 +169,20 @@ export default function TraineeDetail() {
     }
   }, [id]);
 
+  const fetchEmployment = useCallback(async () => {
+    if (!id) return;
+    setTabLoading((prev) => ({ ...prev, employment: true }));
+    try {
+      const res = await api.get(`/api/trainees/${id}/employment-history`);
+      const employment = Array.isArray(res) ? res : res?.employment_history || [];
+      setTabData((prev) => ({ ...prev, employment }));
+    } catch (err) {
+      setTabData((prev) => ({ ...prev, employment: [] }));
+    } finally {
+      setTabLoading((prev) => ({ ...prev, employment: false }));
+    }
+  }, [id]);
+
   // Tab change handler with lazy-loading
   const handleTabChange = async (key) => {
     setActiveTab(key);
@@ -181,16 +204,7 @@ export default function TraineeDetail() {
         setTabLoading((prev) => ({ ...prev, followups: false }));
       }
     } else if (key === 'employment' && tabData.employment === null && !tabLoading.employment) {
-      setTabLoading((prev) => ({ ...prev, employment: true }));
-      try {
-        const res = await api.get(`/api/trainees/${id}/employment-history`);
-        const employment = Array.isArray(res) ? res : res?.employment_history || [];
-        setTabData((prev) => ({ ...prev, employment }));
-      } catch (err) {
-        setTabData((prev) => ({ ...prev, employment: [] }));
-      } finally {
-        setTabLoading((prev) => ({ ...prev, employment: false }));
-      }
+      fetchEmployment();
     } else if (key === 'contact' && tabData.contact === null && !tabLoading.contact) {
       setTabLoading((prev) => ({ ...prev, contact: true }));
       setContactError(null);
@@ -338,8 +352,53 @@ export default function TraineeDetail() {
       return;
     }
 
-    // If Employed, proceed to create employment record
-    if (values.outcome_type === 'Employed' && outcomeRes?.outcome_id) {
+    // Detail record for the outcome type, created against the new outcome.
+    // If it fails the outcome itself is still saved, so warn rather than error.
+    const saveDetail = async (path, payload, label) => {
+      try {
+        await api.post(path, payload);
+        message.success(`Outcome and ${label} details recorded successfully!`);
+      } catch (detailErr) {
+        message.warning(
+          `Outcome recorded, but saving ${label} details failed: ${errorMessage(
+            detailErr,
+            `Failed to save ${label} details`
+          )}`
+        );
+      }
+    };
+
+    if (values.outcome_type === 'Self-employed' && outcomeRes?.outcome_id) {
+      const sePayload = {
+        trainee_id: id,
+        outcome_id: outcomeRes.outcome_id,
+        business_name: values.business_name?.trim(),
+        business_type: values.business_type?.trim(),
+        start_date: values.business_start_date.format('YYYY-MM-DD'),
+      };
+      if (typeof values.monthly_income === 'number') sePayload.monthly_income = values.monthly_income;
+      if (values.business_location?.trim()) sePayload.location = values.business_location.trim();
+      if (typeof values.number_of_workers === 'number') {
+        sePayload.number_of_workers = values.number_of_workers;
+      }
+      await saveDetail('/api/self-employment', sePayload, 'self-employment');
+    } else if (values.outcome_type === 'Apprenticeship' && outcomeRes?.outcome_id) {
+      const apPayload = {
+        trainee_id: id,
+        outcome_id: outcomeRes.outcome_id,
+        organization_name: values.organization_name?.trim(),
+        role: values.apprentice_role?.trim(),
+        start_date: values.apprenticeship_start_date.format('YYYY-MM-DD'),
+      };
+      if (values.apprenticeship_end_date) {
+        apPayload.end_date = values.apprenticeship_end_date.format('YYYY-MM-DD');
+      }
+      if (typeof values.monthly_stipend === 'number') apPayload.monthly_stipend = values.monthly_stipend;
+      if (values.apprenticeship_location?.trim()) {
+        apPayload.location = values.apprenticeship_location.trim();
+      }
+      await saveDetail('/api/apprenticeships', apPayload, 'apprenticeship');
+    } else if (values.outcome_type === 'Employed' && outcomeRes?.outcome_id) {
       let empStatus = values.employment_status || 'Active';
       if (empStatus === 'Left Job') empStatus = 'Left';
 
@@ -517,8 +576,20 @@ export default function TraineeDetail() {
       title: 'Current Status',
       dataIndex: 'current_status',
       key: 'current_status',
-      render: (st) => (
-        <Tag color={st === 'Employed' ? 'green' : 'orange'}>{st}</Tag>
+      render: (st) => <Tag color={RETENTION_STATUS_COLORS[st] || 'default'}>{st}</Tag>,
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      render: (_, row) => (
+        <Space size={8}>
+          <Button size="small" icon={<HistoryOutlined />} onClick={() => setStatusEmployment(row)}>
+            Status
+          </Button>
+          <Button size="small" icon={<SendOutlined />} onClick={() => setVerifyEmployment(row)}>
+            Send to employer
+          </Button>
+        </Space>
       ),
     },
   ];
@@ -1166,16 +1237,181 @@ export default function TraineeDetail() {
               </div>
             )}
 
-            {/* Note for other outcome types */}
-            {selectedOutcomeType && selectedOutcomeType !== 'Employed' && (
-              <Alert
-                type="info"
-                icon={<InfoCircleOutlined />}
-                message="Additional details for this outcome type coming soon"
-                showIcon
-                style={{ marginTop: 12, marginBottom: 16, borderRadius: 6 }}
-              />
+            {/* Dynamic Self-employment Fields */}
+            {selectedOutcomeType === 'Self-employed' && (
+              <div
+                style={{
+                  marginTop: 20,
+                  marginBottom: 20,
+                  padding: 20,
+                  border: '1px solid #e8e8e8',
+                  borderRadius: 8,
+                  backgroundColor: '#fbfbfb',
+                }}
+              >
+                <Title level={5} style={{ margin: '0 0 16px 0', fontWeight: 600 }}>
+                  Business Details
+                </Title>
+
+                <Space style={{ display: 'flex' }} size={16}>
+                  <Form.Item
+                    label="Business Name"
+                    name="business_name"
+                    rules={[
+                      { required: true, whitespace: true, message: 'Please enter business name' },
+                      { min: 2, max: 200 },
+                    ]}
+                    style={{ flex: 1 }}
+                  >
+                    <Input placeholder="e.g. Sharma Tailoring Works" />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Business Type"
+                    name="business_type"
+                    rules={[
+                      { required: true, whitespace: true, message: 'Please enter business type' },
+                      { min: 2, max: 150 },
+                    ]}
+                    style={{ flex: 1 }}
+                  >
+                    <Input placeholder="e.g. Tailoring & Alterations" />
+                  </Form.Item>
+                </Space>
+
+                <Space style={{ display: 'flex' }} size={16}>
+                  <Form.Item
+                    label="Start Date"
+                    name="business_start_date"
+                    rules={[{ required: true, message: 'Please select start date' }]}
+                    style={{ flex: 1 }}
+                  >
+                    <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" placeholder="YYYY-MM-DD" />
+                  </Form.Item>
+
+                  <Form.Item label="Monthly Income (₹)" name="monthly_income" style={{ flex: 1 }}>
+                    <InputNumber min={0} style={{ width: '100%' }} placeholder="e.g. 15000 (Optional)" />
+                  </Form.Item>
+                </Space>
+
+                <Space style={{ display: 'flex' }} size={16}>
+                  <Form.Item
+                    label="Location"
+                    name="business_location"
+                    rules={[{ max: 150 }]}
+                    style={{ flex: 1 }}
+                  >
+                    <Input placeholder="e.g. Raigad (Optional)" />
+                  </Form.Item>
+
+                  <Form.Item label="Number of Workers" name="number_of_workers" style={{ flex: 1 }}>
+                    <InputNumber min={0} precision={0} style={{ width: '100%' }} placeholder="e.g. 1 (Optional)" />
+                  </Form.Item>
+                </Space>
+              </div>
             )}
+
+            {/* Dynamic Apprenticeship Fields */}
+            {selectedOutcomeType === 'Apprenticeship' && (
+              <div
+                style={{
+                  marginTop: 20,
+                  marginBottom: 20,
+                  padding: 20,
+                  border: '1px solid #e8e8e8',
+                  borderRadius: 8,
+                  backgroundColor: '#fbfbfb',
+                }}
+              >
+                <Title level={5} style={{ margin: '0 0 16px 0', fontWeight: 600 }}>
+                  Apprenticeship Details
+                </Title>
+
+                <Space style={{ display: 'flex' }} size={16}>
+                  <Form.Item
+                    label="Organization"
+                    name="organization_name"
+                    rules={[
+                      { required: true, whitespace: true, message: 'Please enter organization name' },
+                      { min: 2, max: 200 },
+                    ]}
+                    style={{ flex: 1 }}
+                  >
+                    <Input placeholder="e.g. Mahindra Logistics" />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Role"
+                    name="apprentice_role"
+                    rules={[
+                      { required: true, whitespace: true, message: 'Please enter role' },
+                      { min: 2, max: 150 },
+                    ]}
+                    style={{ flex: 1 }}
+                  >
+                    <Input placeholder="e.g. Apprentice Technician" />
+                  </Form.Item>
+                </Space>
+
+                <Space style={{ display: 'flex' }} size={16}>
+                  <Form.Item
+                    label="Start Date"
+                    name="apprenticeship_start_date"
+                    rules={[{ required: true, message: 'Please select start date' }]}
+                    style={{ flex: 1 }}
+                  >
+                    <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" placeholder="YYYY-MM-DD" />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="End Date"
+                    name="apprenticeship_end_date"
+                    dependencies={['apprenticeship_start_date']}
+                    rules={[
+                      ({ getFieldValue }) => ({
+                        validator(_, value) {
+                          const start = getFieldValue('apprenticeship_start_date');
+                          if (!value || !start || !value.isBefore(start, 'day')) {
+                            return Promise.resolve();
+                          }
+                          return Promise.reject(new Error('End date cannot be before start date'));
+                        },
+                      }),
+                    ]}
+                    style={{ flex: 1 }}
+                  >
+                    <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" placeholder="YYYY-MM-DD (Optional)" />
+                  </Form.Item>
+                </Space>
+
+                <Space style={{ display: 'flex' }} size={16}>
+                  <Form.Item label="Monthly Stipend (₹)" name="monthly_stipend" style={{ flex: 1 }}>
+                    <InputNumber min={0} style={{ width: '100%' }} placeholder="e.g. 9000 (Optional)" />
+                  </Form.Item>
+
+                  <Form.Item
+                    label="Location"
+                    name="apprenticeship_location"
+                    rules={[{ max: 150 }]}
+                    style={{ flex: 1 }}
+                  >
+                    <Input placeholder="e.g. Nagpur (Optional)" />
+                  </Form.Item>
+                </Space>
+              </div>
+            )}
+
+            {/* Note for outcome types with no detail record */}
+            {selectedOutcomeType &&
+              !['Employed', 'Self-employed', 'Apprenticeship'].includes(selectedOutcomeType) && (
+                <Alert
+                  type="info"
+                  icon={<InfoCircleOutlined />}
+                  message="No further details are needed for this outcome type."
+                  showIcon
+                  style={{ marginTop: 12, marginBottom: 16, borderRadius: 6 }}
+                />
+              )}
 
             {/* Modal Actions */}
             <div
@@ -1199,6 +1435,20 @@ export default function TraineeDetail() {
           </Form>
         </div>
       </Modal>
+
+      <EmploymentStatusModal
+        open={Boolean(statusEmployment)}
+        traineeId={trainee.trainee_id}
+        employment={statusEmployment}
+        onClose={() => setStatusEmployment(null)}
+        onRecorded={fetchEmployment}
+      />
+
+      <SendVerificationModal
+        open={Boolean(verifyEmployment)}
+        employment={verifyEmployment}
+        onClose={() => setVerifyEmployment(null)}
+      />
     </div>
   );
 }

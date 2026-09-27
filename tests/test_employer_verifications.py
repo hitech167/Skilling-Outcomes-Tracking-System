@@ -71,3 +71,43 @@ def test_list_filters_by_status_newest_first(isolated_db):
 
 def test_list_is_admin_only(isolated_db):
     assert analyst.get("/api/employer-verifications").status_code == 403
+
+
+def test_staff_can_confirm_a_pending_request(isolated_db):
+    _, employment_id = _employment()
+    verification_id = _request(employment_id, "hr@voltworks.example")
+
+    res = admin.patch(
+        f"/api/employer-verifications/{verification_id}/status",
+        json={"verification_status": "verified", "verified_by": "Admin",
+              "verification_notes": "Confirmed by phone."},
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["verification_status"] == "Verified"
+    assert body["verified_by"] == "Admin"
+    assert body["verified_date"] is not None
+    assert body["verification_notes"] == "Confirmed by phone."
+
+
+def test_decided_requests_cannot_be_changed(isolated_db):
+    trainee_id, employment_id = _employment()
+    verification_id = _manual(trainee_id, employment_id, "Verified")
+
+    res = admin.patch(
+        f"/api/employer-verifications/{verification_id}/status",
+        json={"verification_status": "Rejected"},
+    )
+    assert res.status_code == 409
+
+
+def test_status_update_rejects_pending_and_unknown_values(isolated_db):
+    _, employment_id = _employment()
+    verification_id = _request(employment_id, None)
+    path = f"/api/employer-verifications/{verification_id}/status"
+
+    assert admin.patch(path, json={"verification_status": "Pending"}).status_code == 422
+    assert admin.patch(path, json={"verification_status": "Maybe"}).status_code == 422
+    assert admin.patch("/api/employer-verifications/VER999999/status",
+                       json={"verification_status": "Rejected"}).status_code == 404
+    assert analyst.patch(path, json={"verification_status": "Rejected"}).status_code == 403
