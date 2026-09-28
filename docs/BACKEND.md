@@ -836,7 +836,6 @@ Use `?district=Nashik` (or another demo district) for clean demo figures.
 - **SMS / WhatsApp** need a gateway account; in India, bulk SMS also
   requires DLT template registration. Until configured, SMS and phone
   follow-ups wait in the outbox for staff.
-- **No frontend dashboard**; the API is used through Swagger or a client.
 - **Users are configured in `.env`** (one admin, one analyst). A user
   table would be needed for many named staff accounts.
 - Self-report and employer links are only reachable from other devices
