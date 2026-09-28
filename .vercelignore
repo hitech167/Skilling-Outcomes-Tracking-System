@@ -1,0 +1,8 @@
+frontend/
+venv/
+tests/
+docs/
+Skilling-Outcomes-Tracking-System/
+__pycache__/
+*.pyc
+.pytest_cache/
