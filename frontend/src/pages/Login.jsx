@@ -1,12 +1,24 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, Form, Input, Button, Alert, Typography } from 'antd';
+import { Card, Form, Input, Button, Alert, Typography, Divider, Space } from 'antd';
 import { motion } from 'framer-motion';
 import { errorMessage as describeError, login } from '../api/client';
 
 const { Title, Text } = Typography;
+
+// SIH judging: lets reviewers explore the app without being handed real
+// credentials out-of-band. These are dedicated public demo credentials
+// (set via ADMIN_PASSWORD / ANALYST_PASSWORD on the backend) sitting on
+// fake/test data only — never point this at a deployment with real
+// trainee data.
+const DEMO_ACCOUNTS = {
+  admin: { username: 'admin', password: 'demo-admin-sih2026' },
+  analyst: { username: 'analyst', password: 'demo-analyst-sih2026' },
+};
+
 export default function Login() {
   const [loading, setLoading] = useState(false);
+  const [demoLoading, setDemoLoading] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
   const navigate = useNavigate();
 
@@ -14,19 +26,28 @@ export default function Login() {
     document.title = "Login — Skilling Outcomes Tracking System";
   }, []);
 
-  const handleSubmit = async (values) => {
-    setLoading(true);
+  const doLogin = async (username, password) => {
     setErrorMessage('');
-
     try {
-      await login(values.username, values.password);
+      await login(username, password);
       navigate('/dashboard');
     } catch (err) {
       // login() throws { status, detail }; there is no err.message to read
       setErrorMessage(describeError(err, 'Login failed. Please check your credentials.'));
-    } finally {
-      setLoading(false);
     }
+  };
+
+  const handleSubmit = async (values) => {
+    setLoading(true);
+    await doLogin(values.username, values.password);
+    setLoading(false);
+  };
+
+  const handleDemoLogin = async (role) => {
+    setDemoLoading(role);
+    const { username, password } = DEMO_ACCOUNTS[role];
+    await doLogin(username, password);
+    setDemoLoading(null);
   };
 
   return (
@@ -104,11 +125,40 @@ export default function Login() {
                 size="large"
                 block
                 loading={loading}
+                disabled={demoLoading !== null}
               >
                 Sign In
               </Button>
             </Form.Item>
           </Form>
+
+          <Divider style={{ margin: '20px 0 16px' }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              For SIH reviewers
+            </Text>
+          </Divider>
+
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <Button
+              block
+              loading={demoLoading === 'admin'}
+              disabled={loading || (demoLoading !== null && demoLoading !== 'admin')}
+              onClick={() => handleDemoLogin('admin')}
+            >
+              View Demo — Admin
+            </Button>
+            <Button
+              block
+              loading={demoLoading === 'analyst'}
+              disabled={loading || (demoLoading !== null && demoLoading !== 'analyst')}
+              onClick={() => handleDemoLogin('analyst')}
+            >
+              View Demo — Analyst
+            </Button>
+          </Space>
+          <Text type="secondary" style={{ fontSize: 12, display: 'block', textAlign: 'center', marginTop: 10 }}>
+            Demo accounts, fake/test data only — no real trainee information.
+          </Text>
         </Card>
 
         <div style={{ textAlign: 'center', marginTop: 20 }}>
