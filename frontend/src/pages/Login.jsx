@@ -110,6 +110,12 @@ export default function Login() {
             </Form.Item>
           </Form>
         </Card>
+
+        <div style={{ textAlign: 'center', marginTop: 20 }}>
+          <a href="/impact" style={{ fontSize: 13, color: '#8c8c8c' }}>
+            View the public programme impact page →
+          </a>
+        </div>
       </motion.div>
     </div>
   );

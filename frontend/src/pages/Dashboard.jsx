@@ -10,6 +10,7 @@ import {
   BulbOutlined,
   IdcardOutlined,
   LineChartOutlined,
+  GlobalOutlined,
 } from '@ant-design/icons';
 import { motion } from 'framer-motion';
 
@@ -88,6 +89,16 @@ const CARDS_CONFIG = [
     path: '/identity',
     available: true,
   },
+  {
+    key: 'impact',
+    title: 'Public Impact Page',
+    description: 'No-login aggregate stats for stakeholders. Opens in a new tab — share the link freely.',
+    icon: <GlobalOutlined style={{ fontSize: 30, color: '#08979c' }} />,
+    roles: ['admin', 'analyst'],
+    path: '/impact',
+    external: true,
+    available: true,
+  },
 ];
 
 const containerVariants = {
@@ -160,7 +171,10 @@ export default function Dashboard() {
                   <Card
                     hoverable={isClickable}
                     onClick={() => {
-                      if (isClickable) {
+                      if (!isClickable) return;
+                      if (card.external) {
+                        window.open(card.path, '_blank', 'noopener,noreferrer');
+                      } else {
                         navigate(card.path);
                       }
                     }}
